@@ -1,0 +1,3 @@
+[submodule "third_party/delaunator-cpp"]
+	path = third_party/delaunator-cpp
+	url = https://github.com/delfrrr/delaunator-cpp.git

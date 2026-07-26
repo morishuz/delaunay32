@@ -1,0 +1,26 @@
+# Build products
+/build*/
+/out/
+/staging/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.dSYM/
+
+# Generated examples and profiles
+/mesh*.svg
+*.profraw
+*.profdata
+core
+
+# Editors and operating systems
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
