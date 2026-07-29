@@ -11,10 +11,7 @@ algorithm, compact two-dart topology, and optional multithreading. The result is
 a triangulator that is deterministic, robust, and particularly fast on large
 point sets.
 
-On an Apple M1, the included benchmark triangulates one million points in
-**48–52 ms** using automatic threading. Across the tested million-point
-distributions, that is **10.7–11.3× faster than Delaunator**. Even the
-single-threaded path is about **3.7–3.8× faster**.
+For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) and around 3× faster than [Fade2D](https://www.geom.at/products/fade2d/).
 
 ![Delaunay32 mesh of 1,000 integer-coordinate points filling a square with 1,994 triangles](images/one_k_mesh.png)
 
@@ -48,7 +45,7 @@ Mapbox. It uses
 [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp), whose maintainers
 describe it as probably the fastest open-source C++ implementation.
 
-Delaunator is included only as an optional benchmark submodule. `Delaunay32`
+Delaunator-cpp is included only as an optional benchmark submodule. `Delaunay32`
 does not wrap it or depend on it as part of the triangulation algorithm.
 
 ### Headline results
@@ -61,21 +58,10 @@ For one million input points:
 | clustered | 143.195 ms | 47.979 ms | 542.438 ms | 3.79× | 11.31× |
 | diagonal | 144.347 ms | 49.935 ms | 545.491 ms | 3.78× | 10.92× |
 
-Across all tested sizes and distributions, Delaunay32 used a geometric mean of
-`0.366×` Delaunator's runtime on one thread and `0.222×` with automatic
-threading—equivalent to geometric-mean speedups of approximately **2.7×** and
-**4.5×**, respectively.
-
-A historical same-process benchmark of an earlier Delaunay32 revision at one
-million points measured automatic Delaunay32 at **72–79 ms**, single-threaded
-Fade2D at **294–311 ms**, and automatically threaded Fade2D at **203–250 ms**.
-Delaunay32 was approximately:
+A same-process benchmark at one million points measured Delaunay32 vs [Fade2D](https://www.geom.at/products/fade2d/) as:
 
 - **3.7–4.3× faster** than single-threaded Fade2D
 - **2.6–3.5× faster** than automatically threaded Fade2D
-
-Fade2D is not included in this repository, and those historical results are not
-directly comparable with the newer Delaunay32-versus-Delaunator table below.
 
 As always, benchmark results are machine- and workload-specific. Run the
 included benchmark on your target hardware before making deployment decisions.
