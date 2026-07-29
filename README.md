@@ -13,7 +13,7 @@ point sets.
 
 For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) and around 3× faster than [Fade2D](https://www.geom.at/products/fade2d/).
 
-![Delaunay32 mesh of 1,000 integer-coordinate points filling a square with 1,994 triangles](images/one_k_mesh.png)
+![Delaunay32 mesh of 1,000 integer-coordinate points filling a square with 1,994 triangles](images/delaunay32_mesh.svg)
 
 ## Highlights
 
@@ -276,8 +276,8 @@ while preserving its aspect ratio.
 
 ```sh
 ./build/delaunay_svg_example \
-  --input points.csv \
-  --output mesh.svg
+  --input examples/data/delaunay32.csv \
+  --output delaunay32.svg
 ```
 
 With no CSV input, the original random mode remains available:

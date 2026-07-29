@@ -24,11 +24,14 @@ using delaunay32::Point;
 using delaunay32::Triangle;
 
 constexpr std::int32_t kDomainMaximum = 999;
-constexpr double kCanvasSize = 1200.0;
+constexpr double kMaximumCanvasSize = 1200.0;
+constexpr double kMinimumCanvasWidth = 480.0;
 constexpr double kHeaderHeight = 56.0;
 constexpr double kPlotMargin = 30.0;
-constexpr double kPlotSize =
-    kCanvasSize - kHeaderHeight - 2.0 * kPlotMargin;
+constexpr double kMaximumPlotWidth =
+    kMaximumCanvasSize - 2.0 * kPlotMargin;
+constexpr double kMaximumPlotHeight =
+    kMaximumCanvasSize - kHeaderHeight - 2.0 * kPlotMargin;
 constexpr std::size_t kInteriorCapacity =
     static_cast<std::size_t>(kDomainMaximum - 1) *
     static_cast<std::size_t>(kDomainMaximum - 1);
@@ -192,6 +195,8 @@ struct SvgTransform {
     double scale = 1.0;
     double left = kPlotMargin;
     double top = kHeaderHeight + kPlotMargin;
+    double canvas_width = kMinimumCanvasWidth;
+    double canvas_height = kHeaderHeight + 2.0 * kPlotMargin;
 
     explicit SvgTransform(const std::vector<Point>& points) {
         min_x = max_x = points[0].x;
@@ -206,15 +211,23 @@ struct SvgTransform {
             static_cast<std::int64_t>(max_x) - min_x);
         const double span_y = static_cast<double>(
             static_cast<std::int64_t>(max_y) - min_y);
-        const double longest_span = std::max(span_x, span_y);
-        if (longest_span > 0.0) {
-            scale = kPlotSize / longest_span;
+        if (span_x > 0.0 || span_y > 0.0) {
+            const double x_scale =
+                span_x > 0.0
+                    ? kMaximumPlotWidth / span_x
+                    : std::numeric_limits<double>::max();
+            const double y_scale =
+                span_y > 0.0
+                    ? kMaximumPlotHeight / span_y
+                    : std::numeric_limits<double>::max();
+            scale = std::min(x_scale, y_scale);
         }
         const double width = span_x * scale;
         const double height = span_y * scale;
-        left = (kCanvasSize - width) / 2.0;
-        top = kHeaderHeight + kPlotMargin +
-              (kPlotSize - height) / 2.0;
+        canvas_width =
+            std::max(kMinimumCanvasWidth, width + 2.0 * kPlotMargin);
+        canvas_height = height + kHeaderHeight + 2.0 * kPlotMargin;
+        left = (canvas_width - width) / 2.0;
     }
 
     double x(std::int32_t value) const {
@@ -310,9 +323,12 @@ void write_svg(
 
     output
         << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1200\" "
-           "height=\"1200\" viewBox=\"0 0 1200 1200\">\n"
-        << "<rect width=\"1200\" height=\"1200\" fill=\"#f7f7f5\"/>\n"
+        << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+        << std::fixed << std::setprecision(2) << transform.canvas_width
+        << "\" height=\"" << transform.canvas_height
+        << "\" viewBox=\"0 0 " << transform.canvas_width << ' '
+        << transform.canvas_height << "\">\n"
+        << "<rect width=\"100%\" height=\"100%\" fill=\"#f7f7f5\"/>\n"
         << "<text x=\"30\" y=\"35\" font-family=\"system-ui, sans-serif\" "
            "font-size=\"18\" fill=\"#202426\">Delaunay32 | "
         << points.size() << " points | " << triangles.size()
