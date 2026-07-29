@@ -58,10 +58,10 @@ For one million input points:
 | clustered | 143.195 ms | 47.979 ms | 542.438 ms | 3.79× | 11.31× |
 | diagonal | 144.347 ms | 49.935 ms | 545.491 ms | 3.78× | 10.92× |
 
-A same-process benchmark at one million points measured Delaunay32 vs [Fade2D](https://www.geom.at/products/fade2d/) as:
+A same-process benchmark (not included in this repo) at one million points measured Delaunay32 to be:
 
-- **3.7–4.3× faster** than single-threaded Fade2D
-- **2.6–3.5× faster** than automatically threaded Fade2D
+3.7–4.3× as fast as single-threaded [Fade2D](https://www.geom.at/products/fade2d/).    
+2.6–3.5× as fast as automatically threaded [Fade2D](https://www.geom.at/products/fade2d/).   
 
 As always, benchmark results are machine- and workload-specific. Run the
 included benchmark on your target hardware before making deployment decisions.
@@ -260,16 +260,36 @@ models repeated triangulations through one retained instance.
 
 ## SVG example
 
-The dependency-free example generates unique random points, inserts all four
-domain corners, validates the mesh, and writes a colored SVG over a red square.
-Any uncovered region therefore remains visible in red.
+The dependency-free example accepts arbitrary signed integer points from a
+two-column CSV file:
+
+```csv
+x,y
+0,0
+500,0
+1000,0
+500,500
+```
+
+It reads the points exactly as supplied and scales the SVG to the input bounds
+while preserving its aspect ratio.
+
+```sh
+./build/delaunay_svg_example \
+  --input points.csv \
+  --output mesh.svg
+```
+
+With no CSV input, the original random mode remains available:
 
 ```sh
 ./build/delaunay_svg_example 100000 mesh.svg 42
 ```
 
-The point count includes the four corners. Random points are restricted to the
-square interior, so the convex hull is exactly the square.
+Random mode generates unique interior points and inserts the four square
+corners. Its point count includes those corners. In CSV mode, the file must
+contain every desired point, including any boundary and corner points; the
+example does not add or remove points.
 
 ## Development
 

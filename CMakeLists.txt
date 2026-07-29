@@ -54,7 +54,12 @@ target_link_libraries(delaunay32 PUBLIC Threads::Threads)
 delaunay32_enable_warnings(delaunay32)
 
 if(DELAUNAY32_BUILD_EXAMPLES)
-    add_executable(delaunay_svg_example examples/random_svg.cpp)
+    add_executable(
+        delaunay_svg_example
+        examples/delaunay_svg_example.cpp
+        examples/svg_io.cpp
+        examples/svg_io.hpp
+    )
     target_link_libraries(
         delaunay_svg_example PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_svg_example)
@@ -112,6 +117,20 @@ if(DELAUNAY32_BUILD_TESTS)
             NAME svg_example
             COMMAND delaunay_svg_example 100
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-smoke.svg" 42)
+        add_test(
+            NAME svg_example_csv
+            COMMAND delaunay_svg_example
+                    --input
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_points.csv"
+                    --output
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-csv-smoke.svg")
+        add_test(
+            NAME svg_example_csv_collinear
+            COMMAND delaunay_svg_example
+                    --input
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_collinear.csv"
+                    --output
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-collinear-smoke.svg")
     endif()
 endif()
 
