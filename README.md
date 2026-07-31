@@ -4,9 +4,9 @@
 
 `Delaunay32` is a C++17 library for triangulating large sets of discrete 2D
 points: pixels, raster samples, voxel projections, fixed-point geometry, and
-other quantized spatial data. Finite `float` input can also be mapped
-automatically onto the certified integer domain while output indices continue
-to reference the original coordinates.
+other quantized spatial data. Finite `float` points can also be passed directly;
+the library quantizes them internally while output indices continue to
+reference the original coordinates.
 
 It combines exact integer predicates with a Morton-ordered divide-and-conquer
 algorithm, compact two-dart topology, and optional multithreading. The result is
@@ -29,6 +29,15 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Uniform float quantization with an optional precision and collision report
 - MIT licensed and dependency-free for normal library use
 
+## Documentation
+
+- [Usage guide](docs/usage.md): complete API, type, exactness, quantization,
+  threading, and error contracts
+- [Float SVG example](examples/delaunay_float_example.cpp): end-to-end float
+  input with a `QuantizationReport`
+- [Integer SVG example](examples/delaunay_svg_example.cpp): generated or CSV
+  integer input
+
 ## When to use it
 
 `Delaunay32` is intended for data that is already discrete or can tolerate a
@@ -36,12 +45,17 @@ high-resolution uniform quantization. Typical examples include image-space
 geometry, raster and height-field samples, projected voxel data, fixed-point
 maps, graphics, and projected spatial datasets.
 
-For floating-point data, `triangulate_float()` keeps the source coordinates
-untouched and returns indices into them, but it chooses edges using quantized
-integer coordinates. This is suitable when preserving the original vertices is
-important but small topology changes near degeneracies are acceptable. Use a
-native floating-point or adaptive-exact triangulator when the Delaunay topology
-of the source floats themselves is the required result.
+Direct float input is practical for most graphics, mapping, visualization, and
+general meshing applications where exact edge topology is not required.
+`triangulate_float()` accepts the points directly, keeps their coordinates
+untouched, and returns indices into the original input. Only the edge decisions
+use internally quantized integer coordinates.
+
+The resulting mesh will normally be very close to one computed directly from
+the source floats, but its edges are not guaranteed to be identical.
+Differences are most likely for nearly coincident, collinear, or cocircular
+points. Use an adaptive-exact triangulator when the precise Delaunay topology
+of the original float coordinates is required.
 
 ## Performance
 
@@ -135,6 +149,8 @@ The exported CMake target is `delaunay32::delaunay32`.
 
 ## Usage
 
+### Integer input
+
 ```cpp
 #include <delaunay32/delaunay.hpp>
 
@@ -161,13 +177,12 @@ int main() {
 ```
 
 For existing struct-of-arrays storage, `triangulate_int(xs, ys, count)` avoids
-constructing a temporary `Point` vector. Version 0.2 uses the explicit
-`triangulate_int` name for both integer layouts; the former
-`triangulate(points)` spelling is not retained as an ambiguous compatibility
-alias.
+constructing a temporary `Point` vector.
 
-Finite float input uses a separate point type and an explicit method so the
-quantized contract is visible at the call site:
+### Float input
+
+Pass finite float coordinates directly as `FloatPoint` values. No manual
+conversion or quantization is required:
 
 ```cpp
 std::vector<delaunay32::FloatPoint> points = {
@@ -183,95 +198,31 @@ const std::vector<delaunay32::Triangle> triangles =
 
 // Triangle indices address the unchanged FloatPoint vector. The report shows
 // the grid step, measured coordinate error, and any quantized point collisions.
+for (const auto& triangle : triangles) {
+    const auto& a = points[triangle.i0];
+    const auto& b = points[triangle.i1];
+    const auto& c = points[triangle.i2];
+    // Use a, b, and c with their original float coordinates.
+}
 ```
 
 The equivalent struct-of-arrays overload is
 `triangulate_float(xs, ys, count, report)`. Both input layouts also have an
-overload without a report argument.
+overload without a report argument when the quantization details are not
+needed.
+
+The returned vertices retain their original precision. The connectivity is
+computed on the internal integer grid, so edge choices can differ from an exact
+Delaunay triangulation of the original floats, particularly near geometric
+degeneracies.
 
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
 are independent.
 
-## Exact integer geometry
-
-Integer coordinates give the library a clear numerical contract:
-
-- orientation and in-circle decisions can be exact;
-- no epsilon or floating-point tie policy is required;
-- storage and sorting remain compact;
-- duplicate coordinates have an unambiguous meaning.
-
-Coordinates may be negative and may include a large fixed offset. Predicate
-selection depends on the coordinate spans
-
-```text
-sx = max_x - min_x
-sy = max_y - min_y
-```
-
-rather than on the absolute coordinate values.
-
-The library inspects the input spans and automatically chooses the narrowest
-certified predicate path:
-
-- `Int64`: fast 64-bit predicates and 32-bit lifted coordinates
-- `Int128`: 128-bit predicates and 64-bit lifts where `__int128` is available
-- `Unsupported`: throws `std::invalid_argument` before topology construction
-
-For equal spans, the largest conservatively certified values are 29,609 for
-`Int64` and 1,940,470,527 for `Int128`. Thin rectangular domains may be much
-wider. The exact runtime test uses `L = sx² + sy²` and requires:
-
-```text
-Int64:
-  L <= UINT32_MAX
-  2*sx*sy <= INT64_MAX
-  L*2*max(sx,sy) <= INT64_MAX
-  L*6*sx*sy <= INT64_MAX
-
-Int128:
-  L <= UINT64_MAX
-  2*sx*sy <= INT64_MAX
-  L*2*max(sx,sy) <= INT128_MAX
-  L*6*sx*sy <= INT128_MAX
-```
-
-Coincident points are collapsed automatically. Every output index refers to the
-lowest original input index at that coordinate. Entirely collinear input has no
-two-dimensional faces and returns an empty triangle vector.
-
-## Quantized float geometry
-
-`triangulate_float()` accepts finite `float` coordinates across their full
-range. It translates the input by its minimum bounds and applies one shared
-scale to both axes:
-
-```text
-scale = kMaxCoordinateSpan / max(max_x - min_x, max_y - min_y)
-qx = round((x - min_x) * scale)
-qy = round((y - min_y) * scale)
-```
-
-Using one scale preserves aspect ratio; the shorter axis is not stretched to
-fill the grid. The resulting integers are triangulated with the same exact
-predicates as direct integer input. On platforms without `__int128`, the target
-span automatically falls back to the certified 64-bit limit.
-
-The returned `Triangle` values contain only indices, so callers recover the
-original float vertices without coordinate loss. The topology is nevertheless
-the topology of `(qx, qy)`, not necessarily of `(x, y)`. Quantization can merge
-nearby points, change an edge choice, change winding in nearly degenerate
-geometry, or perturb oblique collinearity. Axis-aligned collinearity is
-preserved. If fewer than three unique grid points remain, triangulation throws
-`std::invalid_argument`.
-
-`QuantizationReport` describes the actual mapping through `origin_x`,
-`origin_y`, `scale`, and `grid_step`; records the largest source-space error in
-either coordinate as `max_coordinate_error`; and reports `unique_points` and
-`collapsed_points`. A collapsed count includes both exact duplicate inputs and
-distinct float points that map to the same grid coordinate. NaN and infinity
-are rejected.
+The [usage guide](docs/usage.md) gives the exact integer span limits, explains
+every `QuantizationReport` field, lists all overloads and exceptions, and covers
+duplicates, collinear input, winding, threading, and platform differences.
 
 ## How it works
 
@@ -389,6 +340,13 @@ Performance changes should pass the validation suite, improve the full
 benchmark geometric mean, and avoid serious regressions in any large case.
 Failed experimental kernels should remain outside the main branch so the
 production path stays readable.
+
+## Versioning and releases
+
+Delaunay32 follows Semantic Versioning. The version in `CMakeLists.txt` is the
+single source of truth, and published releases use annotated tags such as
+`v0.2.0`. Tags are created from tested commits on `main`, never from feature
+branches. See the [release process](docs/releasing.md) for the checklist.
 
 ## Scope
 
