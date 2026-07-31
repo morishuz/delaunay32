@@ -60,8 +60,7 @@ public:
     explicit Triangulator(std::size_t thread_count = 1);
     ~Triangulator();
     Triangulator(const Triangulator&) = delete;
-    Triangulator& operator=(const Triangulator&) =
-        delete;
+    Triangulator& operator=(const Triangulator&) = delete;
     Triangulator(Triangulator&&) noexcept;
     Triangulator& operator=(Triangulator&&) noexcept;
 
@@ -78,6 +77,7 @@ public:
         const std::int32_t* xs,
         const std::int32_t* ys,
         std::size_t point_count);
+
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
     static constexpr std::size_t kParallelMinPoints = 50000;
@@ -179,15 +179,9 @@ private:
     std::int32_t max_y_ = 0;
     bool int64_wide_intermediates_ = false;
 
-    std::vector<Triangle> triangulate_points_impl(
-        const std::vector<Point>& points);
-    std::vector<Triangle> triangulate_int_impl(
-        const std::int32_t* xs,
-        const std::int32_t* ys,
-        std::size_t point_count);
     static void require_point_count(std::size_t point_count);
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
-    void prepare_points(std::size_t point_count);
+    void triangulate_loaded_points();
     void sort_points_morton(
         std::size_t thread_count,
         std::uint32_t maximum_key,

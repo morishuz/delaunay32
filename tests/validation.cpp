@@ -5,6 +5,7 @@
 
 #include "delaunay32/delaunay.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace delaunay32 {
@@ -67,6 +69,28 @@ void require_reference_match(
             points, candidate, reference, error),
         std::string(label) + ": " + error);
 }
+
+#if defined(__SIZEOF_INT128__)
+std::pair<std::uint64_t, std::uint64_t> coordinate_spans(
+    const std::vector<Point>& points) {
+    std::int32_t min_x = points.front().x;
+    std::int32_t max_x = min_x;
+    std::int32_t min_y = points.front().y;
+    std::int32_t max_y = min_y;
+    for (const Point& point : points) {
+        min_x = std::min(min_x, point.x);
+        max_x = std::max(max_x, point.x);
+        min_y = std::min(min_y, point.y);
+        max_y = std::max(max_y, point.y);
+    }
+    return {
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_x) - min_x),
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_y) - min_y),
+    };
+}
+#endif
 
 void test_predicate_selection() {
     const auto expect =
@@ -262,6 +286,11 @@ void test_wide_predicates() {
         const std::vector<Point> points =
             benchmark_support::generate_points(
                 datasets[i], 10000, 0x9000ULL + i, 100000);
+        const auto [x_span, y_span] = coordinate_spans(points);
+        require(
+            Triangulator::predicate_width_for_spans(x_span, y_span) ==
+                PredicateWidth::Int128,
+            "wide-domain input did not select int128 predicates");
         const std::vector<Triangle> candidate =
             serial.triangulate(points);
         const std::vector<Triangle> reference =

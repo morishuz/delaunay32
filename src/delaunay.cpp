@@ -151,11 +151,6 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 
 std::vector<Triangle> Triangulator::triangulate(
     const std::vector<Point>& points) {
-    return triangulate_points_impl(points);
-}
-
-std::vector<Triangle> Triangulator::triangulate_points_impl(
-    const std::vector<Point>& points) {
     require_point_count(points.size());
     points_.resize(points.size());
     min_x_ = max_x_ = points[0].x;
@@ -173,19 +168,11 @@ std::vector<Triangle> Triangulator::triangulate_points_impl(
             0,
         };
     }
-    prepare_points(points.size());
+    triangulate_loaded_points();
     return std::move(triangles_out_);
 }
 
 std::vector<Triangle> Triangulator::triangulate_int(
-    const std::int32_t* xs,
-    const std::int32_t* ys,
-    std::size_t point_count) {
-    return triangulate_int_impl(xs, ys, point_count);
-}
-
-std::vector<Triangle>
-Triangulator::triangulate_int_impl(
     const std::int32_t* xs,
     const std::int32_t* ys,
     std::size_t point_count) {
@@ -204,11 +191,12 @@ Triangulator::triangulate_int_impl(
         max_y_ = std::max(max_y_, ys[i]);
         points_[i] = {xs[i], ys[i], static_cast<std::uint32_t>(i), 0};
     }
-    prepare_points(point_count);
+    triangulate_loaded_points();
     return std::move(triangles_out_);
 }
 
-void Triangulator::prepare_points(std::size_t point_count) {
+void Triangulator::triangulate_loaded_points() {
+    std::size_t point_count = points_.size();
     const std::int64_t x_span = static_cast<std::int64_t>(max_x_) - min_x_;
     const std::int64_t y_span = static_cast<std::int64_t>(max_y_) - min_y_;
     const PredicateWidth predicate_width =

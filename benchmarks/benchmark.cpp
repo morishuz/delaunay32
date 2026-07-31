@@ -59,6 +59,8 @@ struct Row {
 };
 
 std::size_t automatic_thread_count(std::size_t point_count) {
+    // Mirrors Triangulator's initial automatic scheduling policy. Benchmark
+    // generators produce unique points, so compaction cannot change the count.
     if (point_count < kParallelMinPoints) {
         return 1;
     }
