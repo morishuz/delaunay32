@@ -179,15 +179,15 @@ std::vector<delaunay32::FloatPoint> points = {
 
 delaunay32::QuantizationReport report;
 const std::vector<delaunay32::Triangle> triangles =
-    triangulator.triangulate_float(points, &report);
+    triangulator.triangulate_float(points, report);
 
 // Triangle indices address the unchanged FloatPoint vector. The report shows
 // the grid step, measured coordinate error, and any quantized point collisions.
 ```
 
 The equivalent struct-of-arrays overload is
-`triangulate_float(xs, ys, count, &report)`. The report argument is optional for
-both overloads.
+`triangulate_float(xs, ys, count, report)`. Both input layouts also have an
+overload without a report argument.
 
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances

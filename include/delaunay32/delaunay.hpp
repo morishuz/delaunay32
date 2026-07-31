@@ -104,14 +104,20 @@ public:
     // integer square domain. The returned indices still reference the original
     // float input; only topology decisions use the quantized coordinates.
     std::vector<Triangle> triangulate_float(
+        const std::vector<FloatPoint>& points);
+    std::vector<Triangle> triangulate_float(
         const std::vector<FloatPoint>& points,
-        QuantizationReport* report = nullptr);
+        QuantizationReport& report);
     // Struct-of-arrays overload for existing float coordinate buffers.
     std::vector<Triangle> triangulate_float(
         const float* xs,
         const float* ys,
+        std::size_t point_count);
+    std::vector<Triangle> triangulate_float(
+        const float* xs,
+        const float* ys,
         std::size_t point_count,
-        QuantizationReport* report = nullptr);
+        QuantizationReport& report);
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;

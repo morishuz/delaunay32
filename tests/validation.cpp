@@ -246,7 +246,7 @@ void test_float_api() {
     Triangulator triangulator;
     QuantizationReport report;
     const std::vector<Triangle> vector_mesh =
-        triangulator.triangulate_float(points, &report);
+        triangulator.triangulate_float(points, report);
     require(!vector_mesh.empty(), "float input produced no triangles");
     require(report.scale > 0.0, "float quantization scale is not positive");
     require(report.grid_step > 0.0, "float grid step is not positive");
@@ -284,7 +284,7 @@ void test_float_api() {
     }
     QuantizationReport array_report;
     const std::vector<Triangle> array_mesh = triangulator.triangulate_float(
-        xs.data(), ys.data(), xs.size(), &array_report);
+        xs.data(), ys.data(), xs.size(), array_report);
     require(
         benchmark_support::meshes_equal(vector_mesh, array_mesh),
         "float vector and struct-of-arrays APIs differ");
@@ -299,7 +299,13 @@ void test_float_api() {
         triangulator.triangulate_float(points);
     require(
         benchmark_support::meshes_equal(vector_mesh, no_report_mesh),
-        "optional float report changed the mesh");
+        "vector float report overload changed the mesh");
+    const std::vector<Triangle> array_no_report_mesh =
+        triangulator.triangulate_float(
+            xs.data(), ys.data(), xs.size());
+    require(
+        benchmark_support::meshes_equal(vector_mesh, array_no_report_mesh),
+        "array float report overload changed the mesh");
 }
 
 void test_float_quantization_collisions() {
@@ -316,7 +322,7 @@ void test_float_quantization_collisions() {
     Triangulator triangulator;
     QuantizationReport report;
     const std::vector<Triangle> candidate =
-        triangulator.triangulate_float(points, &report);
+        triangulator.triangulate_float(points, report);
     require(
         report.unique_points == 5 && report.collapsed_points == 1,
         "full-range float collision was not reported");
@@ -354,7 +360,7 @@ void test_float_parallel() {
         serial.triangulate_float(points);
     QuantizationReport report;
     const std::vector<Triangle> parallel_mesh =
-        parallel.triangulate_float(points, &report);
+        parallel.triangulate_float(points, report);
     require(
         report.unique_points == points.size() &&
             report.collapsed_points == 0,

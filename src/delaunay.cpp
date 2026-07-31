@@ -333,27 +333,31 @@ std::vector<Triangle> Triangulator::triangulate_float_impl(
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
-    const std::vector<FloatPoint>& points,
-    QuantizationReport* report) {
-    if (report != nullptr) {
-        *report = {};
-    }
+    const std::vector<FloatPoint>& points) {
     require_point_count(points.size());
     return triangulate_float_impl(
         points.size(),
         [&](std::size_t i) { return points[i].x; },
         [&](std::size_t i) { return points[i].y; },
-        report);
+        nullptr);
+}
+
+std::vector<Triangle> Triangulator::triangulate_float(
+    const std::vector<FloatPoint>& points,
+    QuantizationReport& report) {
+    report = {};
+    require_point_count(points.size());
+    return triangulate_float_impl(
+        points.size(),
+        [&](std::size_t i) { return points[i].x; },
+        [&](std::size_t i) { return points[i].y; },
+        &report);
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
     const float* xs,
     const float* ys,
-    std::size_t point_count,
-    QuantizationReport* report) {
-    if (report != nullptr) {
-        *report = {};
-    }
+    std::size_t point_count) {
     require_point_count(point_count);
     if (xs == nullptr || ys == nullptr) {
         throw std::invalid_argument("coordinate arrays must not be null");
@@ -362,7 +366,24 @@ std::vector<Triangle> Triangulator::triangulate_float(
         point_count,
         [&](std::size_t i) { return xs[i]; },
         [&](std::size_t i) { return ys[i]; },
-        report);
+        nullptr);
+}
+
+std::vector<Triangle> Triangulator::triangulate_float(
+    const float* xs,
+    const float* ys,
+    std::size_t point_count,
+    QuantizationReport& report) {
+    report = {};
+    require_point_count(point_count);
+    if (xs == nullptr || ys == nullptr) {
+        throw std::invalid_argument("coordinate arrays must not be null");
+    }
+    return triangulate_float_impl(
+        point_count,
+        [&](std::size_t i) { return xs[i]; },
+        [&](std::size_t i) { return ys[i]; },
+        &report);
 }
 
 void Triangulator::triangulate_loaded_points() {

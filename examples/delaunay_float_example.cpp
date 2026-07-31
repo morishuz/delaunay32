@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         delaunay32::Triangulator triangulator(0);
         delaunay32::QuantizationReport report;
         const std::vector<delaunay32::Triangle> triangles =
-            triangulator.triangulate_float(points, &report);
+            triangulator.triangulate_float(points, report);
 
         // Triangle stores only indices, so rendering uses the original floats.
         delaunay32_example::write_svg(
