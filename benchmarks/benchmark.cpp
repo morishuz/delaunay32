@@ -30,6 +30,8 @@ constexpr std::int32_t kBenchmarkDomain = 100000;
 #else
 constexpr std::int32_t kBenchmarkDomain = 20000;
 #endif
+constexpr std::size_t kParallelMinPoints = 50000;
+constexpr std::size_t kMaxParallelThreads = 256;
 
 enum class OutputFormat {
     Text,
@@ -55,6 +57,15 @@ struct Row {
     double parallel_ms = 0.0;
     double delaunator_ms = 0.0;
 };
+
+std::size_t automatic_thread_count(std::size_t point_count) {
+    if (point_count < kParallelMinPoints) {
+        return 1;
+    }
+    return std::min<std::size_t>(
+        kMaxParallelThreads,
+        std::max<std::size_t>(1, std::thread::hardware_concurrency()));
+}
 
 void print_usage(const char* program) {
     std::cout
@@ -231,9 +242,8 @@ Row benchmark_case(
     std::vector<Triangle> reference =
         delaunator.triangulate_prepared();
     std::vector<Triangle> serial_output = serial.triangulate(points);
-    Profile parallel_profile;
     std::vector<Triangle> parallel_output =
-        parallel.triangulate_profiled(points, parallel_profile, false);
+        parallel.triangulate(points);
     require_valid("serial Delaunay32", points, serial_output, reference);
     require_valid("parallel Delaunay32", points, parallel_output, reference);
 
@@ -307,7 +317,7 @@ Row benchmark_case(
         dataset,
         point_count,
         serial_output.size(),
-        parallel_profile.thread_count,
+        automatic_thread_count(point_count),
         iterations,
         reuse,
         median(std::move(serial_samples)),

@@ -217,15 +217,11 @@ void test_duplicates() {
         triangle.i2 = representative[triangle.i2];
     }
 
-    Profile profile;
     const std::vector<Triangle> candidate =
-        triangulator.triangulate_profiled(duplicated, profile, false);
+        triangulator.triangulate(duplicated);
     require(
         benchmark_support::meshes_equal(expected, candidate),
         "duplicate compaction changed the triangle set or representatives");
-    require(profile.points == duplicated.size(), "duplicate input count lost");
-    require(profile.unique_points == unique.size(), "unique count is wrong");
-    require(profile.duplicates_removed == 3, "duplicate count is wrong");
 
     std::vector<std::int32_t> xs;
     std::vector<std::int32_t> ys;
@@ -266,14 +262,10 @@ void test_wide_predicates() {
         const std::vector<Point> points =
             benchmark_support::generate_points(
                 datasets[i], 10000, 0x9000ULL + i, 100000);
-        Profile profile;
         const std::vector<Triangle> candidate =
-            serial.triangulate_profiled(points, profile, false);
+            serial.triangulate(points);
         const std::vector<Triangle> reference =
             delaunator.triangulate(points);
-        require(
-            profile.predicate_width == PredicateWidth::Int128,
-            "wide-domain input did not select int128 predicates");
         require_reference_match(
             points, candidate, reference, "wide-predicate case");
     }
@@ -284,11 +276,8 @@ void test_wide_predicates() {
     const std::vector<Triangle> serial_mesh =
         serial.triangulate(parallel_points);
     Triangulator parallel(2);
-    Profile parallel_profile;
     const std::vector<Triangle> parallel_mesh =
-        parallel.triangulate_profiled(
-            parallel_points, parallel_profile, false);
-    require(parallel_profile.thread_count > 1, "parallel path was not used");
+        parallel.triangulate(parallel_points);
     require(
         benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
         "wide serial and parallel triangle sets differ");
@@ -301,14 +290,16 @@ void test_wide_predicates() {
         {std::numeric_limits<std::int32_t>::min(), 1},
         {std::numeric_limits<std::int32_t>::max(), 1},
     };
-    Profile strip_profile;
     const std::vector<Triangle> strip_mesh =
-        serial.triangulate_profiled(extreme_strip, strip_profile, false);
+        serial.triangulate(extreme_strip);
     require(
-        strip_profile.predicate_width == PredicateWidth::Int128,
+        Triangulator::predicate_width_for_spans(
+            std::numeric_limits<std::uint32_t>::max(), 1) ==
+            PredicateWidth::Int128,
         "full-width thin domain did not select int128 predicates");
     require(
-        !strip_profile.int64_wide_intermediates,
+        !Triangulator::int64_wide_intermediates_for_spans(
+            std::numeric_limits<std::uint32_t>::max(), 1),
         "full-width thin domain selected mixed-width intermediates");
     require_valid_mesh(extreme_strip, strip_mesh, "full-width thin domain");
 #endif

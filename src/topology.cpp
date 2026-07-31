@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -20,83 +19,64 @@
 #endif
 
 namespace delaunay32 {
-using detail::elapsed_ms;
-using detail::ProfileClock;
 using detail::ThreadBarrier;
 
 // Keep topology and predicates in one translation unit so the recursive
 // small-leaf merge can inline the exact predicate specialization.
 template <
-    bool CountOperations,
     bool WidePredicates,
     bool ParallelAllocation>
 Triangulator::HullEdges Triangulator::build_range(
     std::size_t first,
     std::size_t last,
-    std::size_t depth,
-    Profile* profile,
     EdgeCursor* cursor) {
-    if constexpr (CountOperations) {
-        profile->max_recursion_depth =
-            std::max(profile->max_recursion_depth, depth);
-    }
     const std::size_t count = last - first;
     if (count == 2) {
         const std::uint32_t edge =
-            make_edge<CountOperations, ParallelAllocation>(
+            make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first),
             static_cast<std::uint32_t>(first + 1),
-            profile,
             cursor);
         return {edge, sym(edge)};
     }
 
     if (count == 3) {
         const std::uint32_t a =
-            make_edge<CountOperations, ParallelAllocation>(
+            make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first),
             static_cast<std::uint32_t>(first + 1),
-            profile,
             cursor);
         const std::uint32_t b =
-            make_edge<CountOperations, ParallelAllocation>(
+            make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first + 1),
             static_cast<std::uint32_t>(first + 2),
-            profile,
             cursor);
         splice(sym(a), b);
 
-        if constexpr (CountOperations) {
-            ++profile->orientation_tests;
-        }
         const std::int64_t winding = orient(
             static_cast<std::uint32_t>(first),
             static_cast<std::uint32_t>(first + 1),
             static_cast<std::uint32_t>(first + 2));
         if (winding > 0) {
-            connect<CountOperations, ParallelAllocation>(
-                b, a, profile, cursor);
+            connect<ParallelAllocation>(b, a, cursor);
             return {a, sym(b)};
         }
         if (winding < 0) {
             const std::uint32_t c =
-                connect<CountOperations, ParallelAllocation>(
-                    b, a, profile, cursor);
+                connect<ParallelAllocation>(b, a, cursor);
             return {sym(c), c};
         }
         return {a, sym(b)};
     }
     const std::size_t middle = first + count / 2;
     HullEdges left =
-        build_range<CountOperations, WidePredicates, ParallelAllocation>(
-            first, middle, depth + 1, profile, cursor);
+        build_range<WidePredicates, ParallelAllocation>(
+            first, middle, cursor);
     HullEdges right =
-        build_range<CountOperations, WidePredicates, ParallelAllocation>(
-            middle, last, depth + 1, profile, cursor);
-    return merge_hulls_inline<
-        CountOperations,
-        WidePredicates,
-        ParallelAllocation>(left, right, profile, cursor);
+        build_range<WidePredicates, ParallelAllocation>(
+            middle, last, cursor);
+    return merge_hulls_inline<WidePredicates, ParallelAllocation>(
+        left, right, cursor);
 }
 
 Triangulator::MortonSplit
@@ -130,20 +110,13 @@ Triangulator::find_morton_split(
 }
 
 template <
-    bool CountOperations,
     bool WidePredicates,
     bool ParallelAllocation>
 Triangulator::DirectionalHulls
 Triangulator::build_morton_range(
     std::size_t first,
     std::size_t last,
-    std::size_t depth,
-    Profile* profile,
     EdgeCursor* cursor) {
-    if constexpr (CountOperations) {
-        profile->max_recursion_depth =
-            std::max(profile->max_recursion_depth, depth);
-    }
     const auto build_leaf = [&] {
         std::sort(
             points_.begin() + static_cast<std::ptrdiff_t>(first),
@@ -181,91 +154,50 @@ Triangulator::build_morton_range(
                     points_[i].lift = local_x * local_x + local_y * local_y;
                 }
             }
-            if constexpr (CountOperations) {
-                if (leaf_uses_int64) {
-                    ++profile->morton_int64_leaves;
-                }
-            }
         }
         const HullEdges hull = [&] {
             if constexpr (WidePredicates) {
                 if (leaf_uses_int64) {
-                    return build_range<
-                        CountOperations,
-                        false,
-                        ParallelAllocation>(
-                        first, last, depth, profile, cursor);
+                    return build_range<false, ParallelAllocation>(
+                        first, last, cursor);
                 }
             }
-            return build_range<
-                CountOperations,
-                WidePredicates,
-                ParallelAllocation>(
-                first, last, depth, profile, cursor);
+            return build_range<WidePredicates, ParallelAllocation>(
+                first, last, cursor);
         }();
-        return scan_directional_hulls<CountOperations>(
-            sym(hull.left_outer), profile);
+        return scan_directional_hulls(sym(hull.left_outer));
     };
 
     const std::size_t count = last - first;
     if (count <= kMortonLeafSize) {
-        if constexpr (CountOperations) {
-            ++profile->morton_leaves;
-            ++profile->morton_leaf_size_counts[count];
-        }
         return build_leaf();
     }
 
     const MortonSplit split = find_morton_split(first, last);
     if (!split.valid) {
-        if constexpr (CountOperations) {
-            ++profile->morton_leaves;
-            ++profile->morton_fallback_leaves;
-        }
         return build_leaf();
-    }
-    if constexpr (CountOperations) {
-        ++profile->morton_internal_nodes;
     }
     const std::size_t middle = split.middle;
 
     const DirectionalHulls left =
-        build_morton_range<
-            CountOperations,
-            WidePredicates,
-            ParallelAllocation>(
-            first,
-            middle,
-            depth + 1,
-            profile,
-            cursor);
+        build_morton_range<WidePredicates, ParallelAllocation>(
+            first, middle, cursor);
     const DirectionalHulls right =
-        build_morton_range<
-            CountOperations,
-            WidePredicates,
-            ParallelAllocation>(
-            middle,
-            last,
-            depth + 1,
-            profile,
-            cursor);
+        build_morton_range<WidePredicates, ParallelAllocation>(
+            middle, last, cursor);
     const bool horizontal = (split.split_bit & 1U) != 0;
     const HullEdges merged =
-        merge_hulls<CountOperations, WidePredicates, ParallelAllocation>(
+        merge_hulls<WidePredicates, ParallelAllocation>(
             horizontal ? left.y : left.x,
             horizontal ? right.y : right.x,
-            profile,
             cursor);
     if (horizontal) {
-        return scan_merged_hulls<CountOperations, true>(
-            sym(merged.left_outer), merged, profile);
+        return scan_merged_hulls<true>(sym(merged.left_outer), merged);
     }
-    return scan_merged_hulls<CountOperations, false>(
-        sym(merged.left_outer), merged, profile);
+    return scan_merged_hulls<false>(sym(merged.left_outer), merged);
 }
 
 template <
-    bool CountOperations,
     bool WidePredicates,
     bool ParallelAllocation>
 DELAUNAY32_ALWAYS_INLINE
@@ -273,33 +205,22 @@ Triangulator::HullEdges
 Triangulator::merge_hulls_inline(
     HullEdges left,
     HullEdges right,
-    Profile* profile,
     EdgeCursor* cursor) {
-    if constexpr (CountOperations) {
-        ++profile->merges;
-    }
     std::uint32_t ldi = left.right_outer;
     std::uint32_t rdi = right.left_outer;
 
     while (true) {
-        if (left_of<CountOperations>(org(rdi), ldi, profile)) {
+        if (left_of(org(rdi), ldi)) {
             ldi = lnext(ldi);
-            if constexpr (CountOperations) {
-                ++profile->tangent_steps;
-            }
-        } else if (right_of<CountOperations>(org(ldi), rdi, profile)) {
+        } else if (right_of(org(ldi), rdi)) {
             rdi = onext(sym(rdi));
-            if constexpr (CountOperations) {
-                ++profile->tangent_steps;
-            }
         } else {
             break;
         }
     }
 
     std::uint32_t base =
-        connect<CountOperations, ParallelAllocation>(
-            sym(rdi), ldi, profile, cursor);
+        connect<ParallelAllocation>(sym(rdi), ldi, cursor);
     if (org(ldi) == org(left.left_outer)) {
         left.left_outer = sym(base);
     }
@@ -310,110 +231,81 @@ Triangulator::merge_hulls_inline(
     // Left/right prune loops stay expanded: factoring them into lambdas
     // measurably regresses the leaf hot path on Apple Silicon.
     while (true) {
-        if constexpr (CountOperations) {
-            ++profile->merge_iterations;
-        }
         std::uint32_t lcand = onext(sym(base));
-        bool valid_l =
-            right_of<CountOperations>(dest(lcand), base, profile);
+        bool valid_l = right_of(dest(lcand), base);
         if (valid_l) {
             bool deleted = false;
-            while (in_circle<
-                CountOperations,
-                WidePredicates,
-                IncirclePurpose::Candidate>(
+            while (in_circle<WidePredicates>(
                 dest(base),
                 org(base),
                 dest(lcand),
-                dest(onext(lcand)),
-                profile)) {
+                dest(onext(lcand)))) {
                 const std::uint32_t next = onext(lcand);
-                delete_edge<CountOperations>(lcand, profile);
+                delete_edge(lcand);
                 lcand = next;
                 deleted = true;
             }
             if (deleted) {
-                valid_l =
-                    right_of<CountOperations>(dest(lcand), base, profile);
+                valid_l = right_of(dest(lcand), base);
             }
         }
 
         std::uint32_t rcand = oprev(base);
-        bool valid_r =
-            right_of<CountOperations>(dest(rcand), base, profile);
+        bool valid_r = right_of(dest(rcand), base);
         if (valid_r) {
             bool deleted = false;
-            while (in_circle<
-                CountOperations,
-                WidePredicates,
-                IncirclePurpose::Candidate>(
+            while (in_circle<WidePredicates>(
                 dest(base),
                 org(base),
                 dest(rcand),
-                dest(oprev(rcand)),
-                profile)) {
+                dest(oprev(rcand)))) {
                 const std::uint32_t next = oprev(rcand);
-                delete_edge<CountOperations>(rcand, profile);
+                delete_edge(rcand);
                 rcand = next;
                 deleted = true;
             }
             if (deleted) {
-                valid_r =
-                    right_of<CountOperations>(dest(rcand), base, profile);
+                valid_r = right_of(dest(rcand), base);
             }
         }
 
-        if constexpr (CountOperations) {
-            profile->merge_left_valid += valid_l;
-            profile->merge_right_valid += valid_r;
-        }
         if (!valid_l && !valid_r) {
             break;
         }
         if (!valid_l ||
             (valid_r &&
-             in_circle<
-                 CountOperations,
-                 WidePredicates,
-                 IncirclePurpose::Choice>(
+             in_circle<WidePredicates>(
                  dest(lcand),
                  org(lcand),
                  org(rcand),
-                 dest(rcand),
-                 profile))) {
-            base = connect<CountOperations, ParallelAllocation>(
-                rcand, sym(base), profile, cursor);
+                 dest(rcand)))) {
+            base = connect<ParallelAllocation>(rcand, sym(base), cursor);
         } else {
-            base = connect<CountOperations, ParallelAllocation>(
-                sym(base), sym(lcand), profile, cursor);
+            base = connect<ParallelAllocation>(
+                sym(base), sym(lcand), cursor);
         }
     }
     return {left.left_outer, right.right_outer};
 }
 
 template <
-    bool CountOperations,
     bool WidePredicates,
     bool ParallelAllocation>
 Triangulator::HullEdges
 Triangulator::merge_hulls(
     HullEdges left,
     HullEdges right,
-    Profile* profile,
     EdgeCursor* cursor) {
     // Leaf recursion expands the body through merge_hulls_inline(). Keeping
     // this wrapper out of other callers avoids duplicating the large kernel
     // throughout the Morton and parallel merge machinery.
-    return merge_hulls_inline<
-        CountOperations,
-        WidePredicates,
-        ParallelAllocation>(left, right, profile, cursor);
+    return merge_hulls_inline<WidePredicates, ParallelAllocation>(
+        left, right, cursor);
 }
 
 std::size_t Triangulator::add_parallel_node(
     std::size_t first,
     std::size_t last,
-    std::size_t depth,
     std::size_t target_size,
     std::vector<ParallelNode>& nodes,
     std::vector<std::size_t>& leaves) const {
@@ -421,7 +313,6 @@ std::size_t Triangulator::add_parallel_node(
     ParallelNode new_node;
     new_node.first = first;
     new_node.last = last;
-    new_node.depth = depth;
     nodes.push_back(new_node);
     if (last - first <= target_size) {
         leaves.push_back(index);
@@ -437,14 +328,12 @@ std::size_t Triangulator::add_parallel_node(
     const std::size_t left = add_parallel_node(
         first,
         split.middle,
-        depth + 1,
         target_size,
         nodes,
         leaves);
     const std::size_t right = add_parallel_node(
         split.middle,
         last,
-        depth + 1,
         target_size,
         nodes,
         leaves);
@@ -460,12 +349,7 @@ template <bool WidePredicates>
 Triangulator::DirectionalHulls
 Triangulator::build_parallel(
     std::size_t thread_count,
-    Profile* profile,
     detail::WorkerTeam& workers) {
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        phase_start = ProfileClock::now();
-    }
     const std::size_t target_jobs =
         std::max<std::size_t>(2, thread_count * kParallelJobsPerThread);
     const std::size_t target_size = std::max(
@@ -476,17 +360,11 @@ Triangulator::build_parallel(
     std::vector<std::size_t> leaves;
     nodes.reserve(target_jobs * 2);
     leaves.reserve(target_jobs);
-    add_parallel_node(
-        0, points_.size(), 1, target_size, nodes, leaves);
+    add_parallel_node(0, points_.size(), target_size, nodes, leaves);
     if (leaves.size() < 2) {
-        if (profile != nullptr) {
-            profile->parallel_leaves = leaves.size();
-            profile->thread_count = 1;
-        }
         active_thread_count_ = 1;
         const DirectionalHulls hull =
-            build_morton_range<false, WidePredicates>(
-                0, points_.size(), 1, nullptr);
+            build_morton_range<WidePredicates>(0, points_.size());
         edge_ranges_.push_back(
             {0, static_cast<std::uint32_t>(edge_count_)});
         return hull;
@@ -518,11 +396,6 @@ Triangulator::build_parallel(
         }
         merge_levels[height].push_back(i);
     }
-    if (profile != nullptr) {
-        profile->parallel_leaves = leaves.size();
-        profile->parallel_merge_levels = merge_levels.size() - 1;
-    }
-
     std::atomic<std::size_t> next_job{0};
     std::atomic<bool> cancelled{false};
     std::exception_ptr first_exception;
@@ -530,7 +403,6 @@ Triangulator::build_parallel(
     const std::size_t worker_count =
         std::min(thread_count, leaves.size());
     ThreadBarrier barrier(worker_count);
-    ProfileClock::time_point leaf_end;
     const auto record_exception = [&] {
         cancelled.store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(exception_mutex);
@@ -556,11 +428,9 @@ Triangulator::build_parallel(
             try {
                 ParallelNode& node = nodes[leaves[job]];
                 node.hull =
-                    build_morton_range<false, WidePredicates, true>(
+                    build_morton_range<WidePredicates, true>(
                         node.first,
                         node.last,
-                        node.depth,
-                        nullptr,
                         &cursor);
                 finish_edge_cursor(cursor);
             } catch (...) {
@@ -570,9 +440,6 @@ Triangulator::build_parallel(
             }
         }
         barrier.wait();
-        if (worker_index == 0 && profile != nullptr) {
-            leaf_end = ProfileClock::now();
-        }
 
         for (std::size_t level = 1;
              level < merge_levels.size();
@@ -599,21 +466,16 @@ Triangulator::build_parallel(
                     const bool horizontal =
                         (node.split_bit & 1U) != 0;
                     const HullEdges merged =
-                        merge_hulls<false, WidePredicates, true>(
+                        merge_hulls<WidePredicates, true>(
                             horizontal ? left.y : left.x,
                             horizontal ? right.y : right.x,
-                            nullptr,
                             &cursor);
                     node.hull =
                         horizontal
-                            ? scan_merged_hulls<false, true>(
-                                  sym(merged.left_outer),
-                                  merged,
-                                  nullptr)
-                            : scan_merged_hulls<false, false>(
-                                  sym(merged.left_outer),
-                                  merged,
-                                  nullptr);
+                            ? scan_merged_hulls<true>(
+                                  sym(merged.left_outer), merged)
+                            : scan_merged_hulls<false>(
+                                  sym(merged.left_outer), merged);
                     finish_edge_cursor(cursor);
                 } catch (...) {
                     finish_edge_cursor(cursor);
@@ -625,29 +487,10 @@ Triangulator::build_parallel(
         }
     };
 
-    ProfileClock::time_point parallel_start;
-    if (profile != nullptr) {
-        profile->parallel_plan_ms = elapsed_ms(phase_start);
-        parallel_start = ProfileClock::now();
-    }
     workers.run(worker_count, run_jobs);
     if (first_exception != nullptr) {
         std::rethrow_exception(first_exception);
     }
-    if (profile != nullptr) {
-        const ProfileClock::time_point merge_end =
-            ProfileClock::now();
-        profile->parallel_leaf_ms =
-            std::chrono::duration<double, std::milli>(
-                leaf_end - parallel_start)
-                .count();
-        profile->parallel_merge_ms =
-            std::chrono::duration<double, std::milli>(
-                merge_end - leaf_end)
-                .count();
-        phase_start = merge_end;
-    }
-
     edge_count_ = 0;
     const auto collect_ranges = [&](const EdgeCursor& cursor) {
         for (const EdgeRange range : cursor.ranges) {
@@ -667,17 +510,12 @@ Triangulator::build_parallel(
         [](const EdgeRange& a, const EdgeRange& b) {
             return a.first < b.first;
         });
-    if (profile != nullptr) {
-        profile->parallel_finalize_ms = elapsed_ms(phase_start);
-    }
     return nodes.front().hull;
 }
 
-template <bool CountOperations>
 Triangulator::DirectionalHulls
 Triangulator::scan_directional_hulls(
-    std::uint32_t outer_seed,
-    Profile* profile) const {
+    std::uint32_t outer_seed) const {
     DirectionalHulls result;
     bool have_x_left = false;
     bool have_x_right = false;
@@ -694,9 +532,6 @@ Triangulator::scan_directional_hulls(
 
     std::uint32_t outer = outer_seed;
     do {
-        if constexpr (CountOperations) {
-            ++profile->hull_darts_scanned;
-        }
         const std::uint32_t outer_origin = org(outer);
         const std::uint32_t outer_destination = dest(outer);
         const Site& origin = points_[outer_origin];
@@ -741,12 +576,11 @@ Triangulator::scan_directional_hulls(
     return result;
 }
 
-template <bool CountOperations, bool Horizontal>
+template <bool Horizontal>
 Triangulator::DirectionalHulls
 Triangulator::scan_merged_hulls(
     std::uint32_t outer_seed,
-    HullEdges split_hull,
-    Profile* profile) const {
+    HullEdges split_hull) const {
     DirectionalHulls result;
     if constexpr (Horizontal) {
         result.y = split_hull;
@@ -762,9 +596,6 @@ Triangulator::scan_merged_hulls(
     std::int32_t right_secondary = 0;
     std::uint32_t outer = outer_seed;
     do {
-        if constexpr (CountOperations) {
-            ++profile->hull_darts_scanned;
-        }
         const Site& origin = points_[org(outer)];
         const Site& destination = points_[dest(outer)];
         if constexpr (Horizontal) {
@@ -836,11 +667,10 @@ void Triangulator::finish_edge_cursor(EdgeCursor& cursor) {
     cursor.range_first = cursor.next;
 }
 
-template <bool CountOperations, bool ParallelAllocation>
+template <bool ParallelAllocation>
 std::uint32_t Triangulator::make_edge(
     std::uint32_t origin,
     std::uint32_t destination,
-    Profile* profile,
     EdgeCursor* cursor) {
     std::uint32_t edge = 0;
     if constexpr (ParallelAllocation) {
@@ -859,9 +689,6 @@ std::uint32_t Triangulator::make_edge(
             edge_origin_.resize(new_size);
             edge_next_.resize(new_size);
             edge_prev_.resize(new_size);
-            if constexpr (CountOperations) {
-                ++profile->arena_resizes;
-            }
         }
         edge = static_cast<std::uint32_t>(edge_count_);
         edge_count_ += 2;
@@ -872,9 +699,6 @@ std::uint32_t Triangulator::make_edge(
     edge_next_[edge + 1] = edge + 1;
     edge_prev_[edge] = edge;
     edge_prev_[edge + 1] = edge + 1;
-    if constexpr (CountOperations) {
-        ++profile->edges_created;
-    }
     return edge;
 }
 
@@ -887,32 +711,24 @@ void Triangulator::splice(std::uint32_t a, std::uint32_t b) {
     edge_prev_[a_next] = b;
 }
 
-template <bool CountOperations, bool ParallelAllocation>
+template <bool ParallelAllocation>
 std::uint32_t Triangulator::connect(
     std::uint32_t a,
     std::uint32_t b,
-    Profile* profile,
     EdgeCursor* cursor) {
     const std::uint32_t edge =
-        make_edge<CountOperations, ParallelAllocation>(
-            dest(a), org(b), profile, cursor);
+        make_edge<ParallelAllocation>(dest(a), org(b), cursor);
     splice(edge, lnext(a));
     splice(sym(edge), b);
     return edge;
 }
 
-template <bool CountOperations>
-void Triangulator::delete_edge(
-    std::uint32_t edge,
-    Profile* profile) {
+void Triangulator::delete_edge(std::uint32_t edge) {
     splice(edge, oprev(edge));
     splice(sym(edge), oprev(sym(edge)));
     const std::uint32_t pair = edge & ~1U;
     edge_origin_[pair] = kDeletedEdge;
     edge_origin_[pair + 1] = kDeletedEdge;
-    if constexpr (CountOperations) {
-        ++profile->edges_deleted;
-    }
 }
 
 std::int64_t Triangulator::orient(
@@ -928,44 +744,24 @@ std::int64_t Triangulator::orient(
                (static_cast<std::int64_t>(pc.x) - pa.x);
 }
 
-template <bool CountOperations>
 bool Triangulator::left_of(
     std::uint32_t point,
-    std::uint32_t edge,
-    Profile* profile) const {
-    if constexpr (CountOperations) {
-        ++profile->orientation_tests;
-    }
+    std::uint32_t edge) const {
     return orient(org(edge), dest(edge), point) > 0;
 }
 
-template <bool CountOperations>
 bool Triangulator::right_of(
     std::uint32_t point,
-    std::uint32_t edge,
-    Profile* profile) const {
-    if constexpr (CountOperations) {
-        ++profile->orientation_tests;
-    }
+    std::uint32_t edge) const {
     return orient(org(edge), dest(edge), point) < 0;
 }
 
-template <
-    bool CountOperations,
-    bool WidePredicates,
-    Triangulator::IncirclePurpose Purpose>
+template <bool WidePredicates>
 bool Triangulator::in_circle(
     std::uint32_t a,
     std::uint32_t b,
     std::uint32_t c,
-    std::uint32_t d,
-    Profile* profile) const {
-    if constexpr (CountOperations) {
-        ++profile->incircle_tests;
-        if constexpr (Purpose == IncirclePurpose::Choice) {
-            ++profile->incircle_choice_tests;
-        }
-    }
+    std::uint32_t d) const {
     const Site& pa = points_[a];
     const Site& pb = points_[b];
     const Site& pc = points_[c];
@@ -1046,42 +842,22 @@ bool Triangulator::in_circle(
 // The API translation unit calls these specializations by declaration. Emit
 // them here so all topology template expansion remains centralized.
 template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<false, false, false>(
+Triangulator::build_morton_range<false, false>(
     std::size_t,
     std::size_t,
-    std::size_t,
-    Profile*,
     EdgeCursor*);
 template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<false, true, false>(
+Triangulator::build_morton_range<true, false>(
     std::size_t,
     std::size_t,
-    std::size_t,
-    Profile*,
-    EdgeCursor*);
-template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<true, false, false>(
-    std::size_t,
-    std::size_t,
-    std::size_t,
-    Profile*,
-    EdgeCursor*);
-template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<true, true, false>(
-    std::size_t,
-    std::size_t,
-    std::size_t,
-    Profile*,
     EdgeCursor*);
 template Triangulator::DirectionalHulls
 Triangulator::build_parallel<false>(
     std::size_t,
-    Profile*,
     detail::WorkerTeam&);
 template Triangulator::DirectionalHulls
 Triangulator::build_parallel<true>(
     std::size_t,
-    Profile*,
     detail::WorkerTeam&);
 
 }  // namespace delaunay32

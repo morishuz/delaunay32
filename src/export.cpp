@@ -7,8 +7,6 @@
 #include <vector>
 
 namespace delaunay32 {
-using detail::elapsed_ms;
-using detail::ProfileClock;
 using detail::ThreadBarrier;
 
 // Face discovery and materialization are isolated from the topology kernel.
@@ -20,23 +18,11 @@ void Triangulator::mark_outer_face() {
     } while (outer != outer_seed_);
 }
 
-template <bool CountOperations>
-void Triangulator::export_triangles(Profile* profile) {
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        phase_start = ProfileClock::now();
-    }
+void Triangulator::export_triangles() {
     triangles_out_.clear();
     triangles_out_.reserve(points_.size() * 2);
-    if constexpr (CountOperations) {
-        profile->export_darts_scanned += edge_count_;
-    }
 
     mark_outer_face();
-    if (profile != nullptr) {
-        profile->export_prepare_ms = elapsed_ms(phase_start);
-        phase_start = ProfileClock::now();
-    }
 
     for (const EdgeRange range : edge_ranges_) {
         for (std::uint32_t start = range.first; start < range.last; ++start) {
@@ -58,9 +44,6 @@ void Triangulator::export_triangles(Profile* profile) {
             });
         }
     }
-    if (profile != nullptr) {
-        profile->export_write_ms = elapsed_ms(phase_start);
-    }
 }
 
 bool Triangulator::find_export_face(
@@ -77,16 +60,11 @@ bool Triangulator::find_export_face(
 
 void Triangulator::export_triangles_parallel(
     std::size_t thread_count,
-    Profile* profile,
     detail::WorkerTeam& workers) {
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        phase_start = ProfileClock::now();
-    }
     const std::size_t worker_count =
         std::min(thread_count, edge_ranges_.size());
     if (worker_count <= 1) {
-        export_triangles<false>(profile);
+        export_triangles();
         return;
     }
 
@@ -111,13 +89,6 @@ void Triangulator::export_triangles_parallel(
     // Contiguous range partitions preserve the previous deterministic face
     // order. A face is owned by its smallest dart index, so workers never
     // mutate visited state while scanning.
-    ProfileClock::time_point scan_start;
-    ProfileClock::time_point scan_end;
-    ProfileClock::time_point write_start;
-    if (profile != nullptr) {
-        profile->export_prepare_ms = elapsed_ms(phase_start);
-        scan_start = ProfileClock::now();
-    }
     const auto run = [&](std::size_t worker_index) {
         std::vector<Triangle> buffer;
         buffer.swap(export_scratch_[worker_index]);
@@ -147,16 +118,10 @@ void Triangulator::export_triangles_parallel(
 
         barrier.wait();
         if (worker_index == 0) {
-            if (profile != nullptr) {
-                scan_end = ProfileClock::now();
-            }
             for (std::size_t i = 0; i < worker_count; ++i) {
                 offsets[i + 1] = offsets[i] + counts[i];
             }
             triangles_out_.resize(offsets.back());
-            if (profile != nullptr) {
-                write_start = ProfileClock::now();
-            }
         }
 
         barrier.wait();
@@ -170,28 +135,6 @@ void Triangulator::export_triangles_parallel(
     };
 
     workers.run(worker_count, run);
-    if (profile != nullptr) {
-        const ProfileClock::time_point write_end =
-            ProfileClock::now();
-        profile->export_count_ms =
-            std::chrono::duration<double, std::milli>(
-                scan_end - scan_start)
-                .count();
-        profile->export_prepare_ms +=
-            std::chrono::duration<double, std::milli>(
-                write_start - scan_end)
-                .count();
-        profile->export_write_ms =
-            std::chrono::duration<double, std::milli>(
-                write_end - write_start)
-                .count();
-    }
 }
-
-// The API translation unit references both serial profiling specializations.
-template void Triangulator::export_triangles<false>(
-    Profile*);
-template void Triangulator::export_triangles<true>(
-    Profile*);
 
 }  // namespace delaunay32

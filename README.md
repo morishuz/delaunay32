@@ -298,10 +298,6 @@ benchmark geometric mean, and avoid serious regressions in any large case.
 Failed experimental kernels should remain outside the main branch so the
 production path stays readable.
 
-`triangulate_profiled()` and `triangulate_int_profiled()` expose phase timings
-through `delaunay32::Profile`. Passing `true` for operation counting forces the
-serial path, allowing counters to remain synchronization-free.
-
 ## Scope
 
 Included:

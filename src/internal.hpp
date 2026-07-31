@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <exception>
@@ -12,14 +11,6 @@
 #include <vector>
 
 namespace delaunay32::detail {
-
-using ProfileClock = std::chrono::steady_clock;
-
-inline double elapsed_ms(ProfileClock::time_point start) {
-    return std::chrono::duration<double, std::milli>(
-               ProfileClock::now() - start)
-        .count();
-}
 
 class ThreadBarrier {
 public:

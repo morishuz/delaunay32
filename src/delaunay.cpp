@@ -12,8 +12,6 @@
 #include <vector>
 
 namespace delaunay32 {
-using detail::elapsed_ms;
-using detail::ProfileClock;
 using detail::ThreadBarrier;
 
 // Public entry points, input normalization, and Morton ordering live here.
@@ -61,22 +59,6 @@ void Triangulator::require_point_count(std::size_t point_count) {
     if (point_count > kIndexMask) {
         throw std::invalid_argument("point count exceeds internal index range");
     }
-}
-
-std::vector<Triangle> Triangulator::finish_triangulation(
-    Profile* profile,
-    std::chrono::steady_clock::time_point total_start) {
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        phase_start = ProfileClock::now();
-    }
-    std::vector<Triangle> result = std::move(triangles_out_);
-    if (profile != nullptr) {
-        profile->output_copy_ms = elapsed_ms(phase_start);
-        profile->total_ms = elapsed_ms(total_start);
-        profile->triangles = result.size();
-    }
-    return result;
 }
 
 detail::WorkerTeam* Triangulator::ensure_worker_team(
@@ -169,31 +151,12 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 
 std::vector<Triangle> Triangulator::triangulate(
     const std::vector<Point>& points) {
-    return triangulate_points_impl<false>(points, nullptr);
+    return triangulate_points_impl(points);
 }
 
-std::vector<Triangle> Triangulator::triangulate_profiled(
-    const std::vector<Point>& points,
-    Profile& profile,
-    bool collect_operation_counts) {
-    profile = {};
-    return collect_operation_counts
-               ? triangulate_points_impl<true>(points, &profile)
-               : triangulate_points_impl<false>(points, &profile);
-}
-
-template <bool CountOperations>
 std::vector<Triangle> Triangulator::triangulate_points_impl(
-    const std::vector<Point>& points,
-    Profile* profile) {
+    const std::vector<Point>& points) {
     require_point_count(points.size());
-    ProfileClock::time_point total_start;
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        profile->points = points.size();
-        total_start = ProfileClock::now();
-        phase_start = total_start;
-    }
     points_.resize(points.size());
     min_x_ = max_x_ = points[0].x;
     min_y_ = max_y_ = points[0].y;
@@ -210,52 +173,25 @@ std::vector<Triangle> Triangulator::triangulate_points_impl(
             0,
         };
     }
-    if (profile != nullptr) {
-        profile->ingestion_ms = elapsed_ms(phase_start);
-    }
-    prepare_points<CountOperations>(points.size(), profile);
-    return finish_triangulation(profile, total_start);
+    prepare_points(points.size());
+    return std::move(triangles_out_);
 }
 
 std::vector<Triangle> Triangulator::triangulate_int(
     const std::int32_t* xs,
     const std::int32_t* ys,
     std::size_t point_count) {
-    return triangulate_int_impl<false>(xs, ys, point_count, nullptr);
+    return triangulate_int_impl(xs, ys, point_count);
 }
 
-std::vector<Triangle>
-Triangulator::triangulate_int_profiled(
-    const std::int32_t* xs,
-    const std::int32_t* ys,
-    std::size_t point_count,
-    Profile& profile,
-    bool collect_operation_counts) {
-    profile = {};
-    return collect_operation_counts
-               ? triangulate_int_impl<true>(
-                     xs, ys, point_count, &profile)
-               : triangulate_int_impl<false>(
-                     xs, ys, point_count, &profile);
-}
-
-template <bool CountOperations>
 std::vector<Triangle>
 Triangulator::triangulate_int_impl(
     const std::int32_t* xs,
     const std::int32_t* ys,
-    std::size_t point_count,
-    Profile* profile) {
+    std::size_t point_count) {
     require_point_count(point_count);
     if (xs == nullptr || ys == nullptr) {
         throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    ProfileClock::time_point total_start;
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        profile->points = point_count;
-        total_start = ProfileClock::now();
-        phase_start = total_start;
     }
     points_.resize(point_count);
     min_x_ = max_x_ = xs[0];
@@ -268,21 +204,11 @@ Triangulator::triangulate_int_impl(
         max_y_ = std::max(max_y_, ys[i]);
         points_[i] = {xs[i], ys[i], static_cast<std::uint32_t>(i), 0};
     }
-    if (profile != nullptr) {
-        profile->ingestion_ms = elapsed_ms(phase_start);
-    }
-    prepare_points<CountOperations>(point_count, profile);
-    return finish_triangulation(profile, total_start);
+    prepare_points(point_count);
+    return std::move(triangles_out_);
 }
 
-template <bool CountOperations>
-void Triangulator::prepare_points(
-    std::size_t point_count,
-    Profile* profile) {
-    ProfileClock::time_point phase_start;
-    if (profile != nullptr) {
-        phase_start = ProfileClock::now();
-    }
+void Triangulator::prepare_points(std::size_t point_count) {
     const std::int64_t x_span = static_cast<std::int64_t>(max_x_) - min_x_;
     const std::int64_t y_span = static_cast<std::int64_t>(max_y_) - min_y_;
     const PredicateWidth predicate_width =
@@ -300,10 +226,6 @@ void Triangulator::prepare_points(
         int64_wide_intermediates_for_spans(
             static_cast<std::uint64_t>(x_span),
             static_cast<std::uint64_t>(y_span));
-    if (profile != nullptr) {
-        profile->predicate_width = predicate_width;
-        profile->int64_wide_intermediates = int64_wide_intermediates_;
-    }
     const std::uint64_t maximum_span =
         static_cast<std::uint64_t>(std::max(x_span, y_span));
     std::uint32_t morton_shift = 0;
@@ -336,26 +258,14 @@ void Triangulator::prepare_points(
     }
     effective_threads =
         std::min(effective_threads, kMaxParallelThreads);
-    if constexpr (CountOperations) {
+    if (point_count < kParallelMinPoints) {
         effective_threads = 1;
-    } else if (point_count < kParallelMinPoints) {
-        effective_threads = 1;
-    }
-    if (profile != nullptr) {
-        profile->key_generation_ms = elapsed_ms(phase_start);
-        phase_start = ProfileClock::now();
     }
     detail::WorkerTeam* workers =
         effective_threads > 1
             ? ensure_worker_team(effective_threads)
             : nullptr;
     sort_points_morton(effective_threads, maximum_morton_key, workers);
-    if (profile != nullptr) {
-        profile->radix_sort_ms = elapsed_ms(phase_start);
-        profile->sort_ms =
-            profile->key_generation_ms + profile->radix_sort_ms;
-        phase_start = ProfileClock::now();
-    }
     // Equal coordinates share a Morton key. Keep the unique-input scan
     // write-free; SiteLessXY puts the lowest original index first, and only
     // the suffix after the first duplicate needs in-place compaction.
@@ -433,17 +343,9 @@ void Triangulator::prepare_points(
     if (unique_count < 3) {
         throw std::invalid_argument("need at least 3 unique points");
     }
-    if (profile != nullptr) {
-        profile->unique_points = unique_count;
-        profile->duplicates_removed = point_count - unique_count;
-    }
     point_count = unique_count;
     if (point_count < kParallelMinPoints) {
         effective_threads = 1;
-    }
-    if (profile != nullptr) {
-        profile->collision_sort_ms = elapsed_ms(phase_start);
-        phase_start = ProfileClock::now();
     }
     edge_count_ = 0;
     edge_ranges_.clear();
@@ -460,56 +362,27 @@ void Triangulator::prepare_points(
         edge_origin_.resize(edge_capacity);
         edge_next_.resize(edge_capacity);
         edge_prev_.resize(edge_capacity);
-        if constexpr (CountOperations) {
-            ++profile->arena_resizes;
-        }
-    }
-
-    if (profile != nullptr) {
-        profile->arena_setup_ms = elapsed_ms(phase_start);
-        profile->setup_ms =
-            profile->collision_sort_ms + profile->arena_setup_ms;
     }
     active_thread_count_ = effective_threads;
-    if (profile != nullptr) {
-        profile->thread_count = effective_threads;
-        phase_start = ProfileClock::now();
-    }
     const DirectionalHulls hull =
         effective_threads > 1
             ? (wide_predicates
                    ? build_parallel<true>(
-                         effective_threads, profile, *workers)
+                         effective_threads, *workers)
                    : build_parallel<false>(
-                         effective_threads, profile, *workers))
+                         effective_threads, *workers))
             : (wide_predicates
-                   ? build_morton_range<CountOperations, true>(
-                         0, point_count, 1, profile)
-                   : build_morton_range<CountOperations, false>(
-                         0, point_count, 1, profile));
+                   ? build_morton_range<true>(0, point_count)
+                   : build_morton_range<false>(0, point_count));
     if (effective_threads == 1) {
         edge_ranges_.push_back(
             {0, static_cast<std::uint32_t>(edge_count_)});
     }
-    if (profile != nullptr) {
-        profile->edge_ranges = edge_ranges_.size();
-    }
     outer_seed_ = sym(hull.x.left_outer);
-    if (profile != nullptr) {
-        profile->build_ms = elapsed_ms(phase_start);
-        if (profile->thread_count == 1) {
-            profile->serial_build_ms = profile->build_ms;
-        }
-        phase_start = ProfileClock::now();
-    }
     if (active_thread_count_ > 1) {
-        export_triangles_parallel(
-            active_thread_count_, profile, *workers);
+        export_triangles_parallel(active_thread_count_, *workers);
     } else {
-        export_triangles<CountOperations>(profile);
-    }
-    if (profile != nullptr) {
-        profile->export_ms = elapsed_ms(phase_start);
+        export_triangles();
     }
 }
 
