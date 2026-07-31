@@ -26,5 +26,10 @@ void write_svg(
     const std::string& output_path,
     const std::vector<delaunay32::Point>& points,
     const std::vector<delaunay32::Triangle>& triangles);
+void write_svg(
+    const std::string& output_path,
+    const std::vector<delaunay32::FloatPoint>& points,
+    const std::vector<delaunay32::Triangle>& triangles,
+    const delaunay32::QuantizationReport& report);
 
 }  // namespace delaunay32_example

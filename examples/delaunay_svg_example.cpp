@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
 
         delaunay32::Triangulator triangulator(0);
         const std::vector<delaunay32::Triangle> triangles =
-            triangulator.triangulate(points);
+            triangulator.triangulate_int(points);
 
         delaunay32_example::write_svg(
             options.output_path, points, triangles);

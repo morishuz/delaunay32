@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -68,6 +69,24 @@ void require_reference_match(
         benchmark_support::validate_against_reference(
             points, candidate, reference, error),
         std::string(label) + ": " + error);
+}
+
+std::vector<Point> quantize_from_report(
+    const std::vector<FloatPoint>& points,
+    const QuantizationReport& report) {
+    std::vector<Point> quantized;
+    quantized.reserve(points.size());
+    for (const FloatPoint& point : points) {
+        quantized.push_back({
+            static_cast<std::int32_t>(std::llround(
+                (static_cast<double>(point.x) - report.origin_x) *
+                report.scale)),
+            static_cast<std::int32_t>(std::llround(
+                (static_cast<double>(point.y) - report.origin_y) *
+                report.scale)),
+        });
+    }
+    return quantized;
 }
 
 #if defined(__SIZEOF_INT128__)
@@ -172,13 +191,13 @@ void test_deterministic_cases() {
         const std::vector<Triangle> reference =
             delaunator.triangulate(points);
         const std::vector<Triangle> candidate =
-            serial.triangulate(points);
+            serial.triangulate_int(points);
         require_reference_match(
             points, candidate, reference, "serial deterministic case");
 
         if (sizes[i] >= 50000) {
             const std::vector<Triangle> parallel_candidate =
-                parallel.triangulate(points);
+                parallel.triangulate_int(points);
             require_reference_match(
                 points,
                 parallel_candidate,
@@ -205,12 +224,158 @@ void test_struct_of_arrays_api() {
 
     Triangulator triangulator;
     const std::vector<Triangle> vector_mesh =
-        triangulator.triangulate(points);
+        triangulator.triangulate_int(points);
     const std::vector<Triangle> array_mesh =
         triangulator.triangulate_int(xs.data(), ys.data(), points.size());
     require(
         benchmark_support::meshes_equal(vector_mesh, array_mesh),
         "vector and struct-of-arrays APIs differ");
+}
+
+void test_float_api() {
+    const std::vector<FloatPoint> points = {
+        {0.125F, 0.25F},
+        {5.5F, 0.1F},
+        {6.0F, 4.5F},
+        {-1.0F, 5.0F},
+        {2.75F, 2.0F},
+        {4.125F, 3.25F},
+    };
+    const std::vector<FloatPoint> original = points;
+
+    Triangulator triangulator;
+    QuantizationReport report;
+    const std::vector<Triangle> vector_mesh =
+        triangulator.triangulate_float(points, &report);
+    require(!vector_mesh.empty(), "float input produced no triangles");
+    require(report.scale > 0.0, "float quantization scale is not positive");
+    require(report.grid_step > 0.0, "float grid step is not positive");
+    require(
+        std::abs(report.scale * report.grid_step - 1.0) < 1e-12,
+        "float grid step is not the inverse scale");
+    require(
+        report.max_coordinate_error <= report.grid_step * 0.500001,
+        "reported float quantization error exceeds half a grid step");
+    require(
+        report.unique_points == points.size() &&
+            report.collapsed_points == 0,
+        "distinct float input unexpectedly collapsed");
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        require(
+            points[i].x == original[i].x && points[i].y == original[i].y,
+            "float input coordinates were modified");
+    }
+
+    const std::vector<Point> quantized =
+        quantize_from_report(points, report);
+    const std::vector<Triangle> integer_mesh =
+        triangulator.triangulate_int(quantized);
+    require(
+        benchmark_support::meshes_equal(vector_mesh, integer_mesh),
+        "float API differs from its reported integer quantization");
+
+    std::vector<float> xs;
+    std::vector<float> ys;
+    xs.reserve(points.size());
+    ys.reserve(points.size());
+    for (const FloatPoint& point : points) {
+        xs.push_back(point.x);
+        ys.push_back(point.y);
+    }
+    QuantizationReport array_report;
+    const std::vector<Triangle> array_mesh = triangulator.triangulate_float(
+        xs.data(), ys.data(), xs.size(), &array_report);
+    require(
+        benchmark_support::meshes_equal(vector_mesh, array_mesh),
+        "float vector and struct-of-arrays APIs differ");
+    require(
+        report.origin_x == array_report.origin_x &&
+            report.origin_y == array_report.origin_y &&
+            report.scale == array_report.scale &&
+            report.unique_points == array_report.unique_points,
+        "float overloads reported different quantization");
+
+    const std::vector<Triangle> no_report_mesh =
+        triangulator.triangulate_float(points);
+    require(
+        benchmark_support::meshes_equal(vector_mesh, no_report_mesh),
+        "optional float report changed the mesh");
+}
+
+void test_float_quantization_collisions() {
+    const float maximum = std::numeric_limits<float>::max();
+    const std::vector<FloatPoint> points = {
+        {-maximum, -maximum},
+        {maximum, -maximum},
+        {maximum, maximum},
+        {-maximum, maximum},
+        {0.0F, 0.0F},
+        {1.0F, 1.0F},
+    };
+
+    Triangulator triangulator;
+    QuantizationReport report;
+    const std::vector<Triangle> candidate =
+        triangulator.triangulate_float(points, &report);
+    require(
+        report.unique_points == 5 && report.collapsed_points == 1,
+        "full-range float collision was not reported");
+    for (const Triangle& triangle : candidate) {
+        require(
+            triangle.i0 != 5 && triangle.i1 != 5 && triangle.i2 != 5,
+            "quantized duplicate did not retain its lowest input index");
+    }
+
+    const std::vector<Point> quantized =
+        quantize_from_report(points, report);
+    const std::vector<Triangle> expected =
+        triangulator.triangulate_int(quantized);
+    require(
+        benchmark_support::meshes_equal(candidate, expected),
+        "full-range float mesh differs from integer quantization");
+}
+
+void test_float_parallel() {
+    const std::vector<Point> integer_points =
+        benchmark_support::generate_points(
+            Dataset::Uniform, 60000, 0xf10a7ULL, 20000);
+    std::vector<FloatPoint> points;
+    points.reserve(integer_points.size());
+    for (const Point& point : integer_points) {
+        points.push_back({
+            static_cast<float>(point.x) * 0.25F + 0.125F,
+            static_cast<float>(point.y) * 0.25F - 0.375F,
+        });
+    }
+
+    Triangulator serial(1);
+    Triangulator parallel(2);
+    const std::vector<Triangle> serial_mesh =
+        serial.triangulate_float(points);
+    QuantizationReport report;
+    const std::vector<Triangle> parallel_mesh =
+        parallel.triangulate_float(points, &report);
+    require(
+        report.unique_points == points.size() &&
+            report.collapsed_points == 0,
+        "parallel float quantization unexpectedly collapsed points");
+    require(
+        benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
+        "serial and parallel float triangle sets differ");
+}
+
+void test_float_collinear_input() {
+    Triangulator triangulator;
+    const std::vector<FloatPoint> points = {
+        {-4.5F, 7.25F},
+        {-1.5F, 7.25F},
+        {0.0F, 7.25F},
+        {3.0F, 7.25F},
+        {9.0F, 7.25F},
+    };
+    require(
+        triangulator.triangulate_float(points).empty(),
+        "axis-aligned collinear float input produced a triangle");
 }
 
 void test_duplicates() {
@@ -234,7 +399,7 @@ void test_duplicates() {
     };
 
     Triangulator triangulator;
-    std::vector<Triangle> expected = triangulator.triangulate(unique);
+    std::vector<Triangle> expected = triangulator.triangulate_int(unique);
     for (Triangle& triangle : expected) {
         triangle.i0 = representative[triangle.i0];
         triangle.i1 = representative[triangle.i1];
@@ -242,7 +407,7 @@ void test_duplicates() {
     }
 
     const std::vector<Triangle> candidate =
-        triangulator.triangulate(duplicated);
+        triangulator.triangulate_int(duplicated);
     require(
         benchmark_support::meshes_equal(expected, candidate),
         "duplicate compaction changed the triangle set or representatives");
@@ -264,11 +429,11 @@ void test_duplicates() {
 
 void test_collinear_input() {
     Triangulator triangulator;
-    const std::vector<Triangle> horizontal = triangulator.triangulate(
+    const std::vector<Triangle> horizontal = triangulator.triangulate_int(
         {{-4, 7}, {-1, 7}, {0, 7}, {3, 7}, {9, 7}});
     require(horizontal.empty(), "collinear input produced a triangle");
 
-    const std::vector<Triangle> diagonal = triangulator.triangulate(
+    const std::vector<Triangle> diagonal = triangulator.triangulate_int(
         {{-4, -7}, {-1, -1}, {0, 1}, {3, 7}, {9, 19}});
     require(diagonal.empty(), "diagonal collinear input produced a triangle");
 }
@@ -292,7 +457,7 @@ void test_wide_predicates() {
                 PredicateWidth::Int128,
             "wide-domain input did not select int128 predicates");
         const std::vector<Triangle> candidate =
-            serial.triangulate(points);
+            serial.triangulate_int(points);
         const std::vector<Triangle> reference =
             delaunator.triangulate(points);
         require_reference_match(
@@ -303,10 +468,10 @@ void test_wide_predicates() {
         benchmark_support::generate_points(
             Dataset::Uniform, 60000, 0xfeedULL, 100000);
     const std::vector<Triangle> serial_mesh =
-        serial.triangulate(parallel_points);
+        serial.triangulate_int(parallel_points);
     Triangulator parallel(2);
     const std::vector<Triangle> parallel_mesh =
-        parallel.triangulate(parallel_points);
+        parallel.triangulate_int(parallel_points);
     require(
         benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
         "wide serial and parallel triangle sets differ");
@@ -320,7 +485,7 @@ void test_wide_predicates() {
         {std::numeric_limits<std::int32_t>::max(), 1},
     };
     const std::vector<Triangle> strip_mesh =
-        serial.triangulate(extreme_strip);
+        serial.triangulate_int(extreme_strip);
     require(
         Triangulator::predicate_width_for_spans(
             std::numeric_limits<std::uint32_t>::max(), 1) ==
@@ -338,12 +503,12 @@ void test_invalid_inputs() {
     Triangulator triangulator;
     require_invalid(
         [&] {
-            triangulator.triangulate({{0, 0}, {1, 1}});
+            triangulator.triangulate_int({{0, 0}, {1, 1}});
         },
         "fewer than three points");
     require_invalid(
         [&] {
-            triangulator.triangulate(
+            triangulator.triangulate_int(
                 {{0, 0}, {0, 0}, {1, 1}, {1, 1}});
         },
         "fewer than three unique points");
@@ -352,10 +517,50 @@ void test_invalid_inputs() {
             triangulator.triangulate_int(nullptr, nullptr, 3);
         },
         "null coordinate arrays");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(
+                std::vector<FloatPoint>{{0.0F, 0.0F}, {1.0F, 1.0F}});
+        },
+        "fewer than three float points");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(nullptr, nullptr, 3);
+        },
+        "null float coordinate arrays");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(std::vector<FloatPoint>{
+                {0.0F, 0.0F},
+                {1.0F, 0.0F},
+                {std::numeric_limits<float>::quiet_NaN(), 1.0F},
+            });
+        },
+        "NaN float coordinate");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(std::vector<FloatPoint>{
+                {0.0F, 0.0F},
+                {1.0F, 0.0F},
+                {0.0F, std::numeric_limits<float>::infinity()},
+            });
+        },
+        "infinite float coordinate");
+    const float maximum = std::numeric_limits<float>::max();
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(std::vector<FloatPoint>{
+                {-maximum, 0.0F},
+                {0.0F, 0.0F},
+                {1.0F, 0.0F},
+                {2.0F, 0.0F},
+            });
+        },
+        "fewer than three unique quantized float points");
 #if defined(__SIZEOF_INT128__)
     require_invalid(
         [&] {
-            triangulator.triangulate({
+            triangulator.triangulate_int({
                 {
                     std::numeric_limits<std::int32_t>::min(),
                     std::numeric_limits<std::int32_t>::min(),
@@ -382,13 +587,17 @@ int main() {
         delaunay32::test_predicate_selection();
         delaunay32::test_deterministic_cases();
         delaunay32::test_struct_of_arrays_api();
+        delaunay32::test_float_api();
+        delaunay32::test_float_quantization_collisions();
+        delaunay32::test_float_parallel();
+        delaunay32::test_float_collinear_input();
         delaunay32::test_duplicates();
         delaunay32::test_collinear_input();
         delaunay32::test_wide_predicates();
         delaunay32::test_invalid_inputs();
         std::cout
-            << "validation passed: deterministic, duplicate, collinear, API, "
-               "predicate-width, and parallel cases\n";
+            << "validation passed: deterministic, duplicate, collinear, "
+               "integer/float API, predicate-width, and parallel cases\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "validation failed: " << error.what() << '\n';

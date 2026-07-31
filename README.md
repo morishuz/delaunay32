@@ -1,10 +1,12 @@
 # Delaunay32
 
-**Fast, exact, parallel 2D Delaunay triangulation for signed 32-bit integer coordinates.**
+**Fast, exact, parallel 2D Delaunay triangulation for signed 32-bit integer coordinates, with convenient float quantization.**
 
 `Delaunay32` is a C++17 library for triangulating large sets of discrete 2D
 points: pixels, raster samples, voxel projections, fixed-point geometry, and
-other quantized spatial data.
+other quantized spatial data. Finite `float` input can also be mapped
+automatically onto the certified integer domain while output indices continue
+to reference the original coordinates.
 
 It combines exact integer predicates with a Morton-ordered divide-and-conquer
 algorithm, compact two-dart topology, and optional multithreading. The result is
@@ -21,20 +23,25 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Signed 32-bit integer input, including negative coordinates and large offsets
 - Serial and shared-memory parallel execution
 - Deterministic handling of duplicate points
-- Counterclockwise triangle indices referencing the original input
+- Triangle indices referencing the original input, counterclockwise on the
+  triangulation grid
 - Efficient struct-of-arrays API for existing integer buffers
+- Uniform float quantization with an optional precision and collision report
 - MIT licensed and dependency-free for normal library use
 
 ## When to use it
 
-`Delaunay32` is intended for data that is already discrete or can naturally be
-represented on an integer grid. Typical examples include image-space geometry,
-raster and height-field samples, projected voxel data, fixed-point maps, and
-quantized spatial datasets.
+`Delaunay32` is intended for data that is already discrete or can tolerate a
+high-resolution uniform quantization. Typical examples include image-space
+geometry, raster and height-field samples, projected voxel data, fixed-point
+maps, graphics, and projected spatial datasets.
 
-It is not a drop-in replacement for a general floating-point triangulator. If
-your source data is floating point, selecting a fixed-point scale—and accepting
-the resulting quantization—is an application-level decision.
+For floating-point data, `triangulate_float()` keeps the source coordinates
+untouched and returns indices into them, but it chooses edges using quantized
+integer coordinates. This is suitable when preserving the original vertices is
+important but small topology changes near degeneracies are acceptable. Use a
+native floating-point or adaptive-exact triangulator when the Delaunay topology
+of the source floats themselves is the required result.
 
 ## Performance
 
@@ -145,7 +152,7 @@ int main() {
     // 1 selects the serial path; 0 selects the hardware thread count.
     delaunay32::Triangulator triangulator(0);
     const std::vector<delaunay32::Triangle> triangles =
-        triangulator.triangulate(points);
+        triangulator.triangulate_int(points);
 
     for (const auto& triangle : triangles) {
         // i0, i1, and i2 index the original point vector in CCW order.
@@ -154,7 +161,33 @@ int main() {
 ```
 
 For existing struct-of-arrays storage, `triangulate_int(xs, ys, count)` avoids
-constructing a temporary `Point` vector.
+constructing a temporary `Point` vector. Version 0.2 uses the explicit
+`triangulate_int` name for both integer layouts; the former
+`triangulate(points)` spelling is not retained as an ambiguous compatibility
+alias.
+
+Finite float input uses a separate point type and an explicit method so the
+quantized contract is visible at the call site:
+
+```cpp
+std::vector<delaunay32::FloatPoint> points = {
+    {0.125F, 0.25F},
+    {5.5F, 0.1F},
+    {6.0F, 4.5F},
+    {-1.0F, 5.0F},
+};
+
+delaunay32::QuantizationReport report;
+const std::vector<delaunay32::Triangle> triangles =
+    triangulator.triangulate_float(points, &report);
+
+// Triangle indices address the unchanged FloatPoint vector. The report shows
+// the grid step, measured coordinate error, and any quantized point collisions.
+```
+
+The equivalent struct-of-arrays overload is
+`triangulate_float(xs, ys, count, &report)`. The report argument is optional for
+both overloads.
 
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
@@ -208,6 +241,38 @@ Coincident points are collapsed automatically. Every output index refers to the
 lowest original input index at that coordinate. Entirely collinear input has no
 two-dimensional faces and returns an empty triangle vector.
 
+## Quantized float geometry
+
+`triangulate_float()` accepts finite `float` coordinates across their full
+range. It translates the input by its minimum bounds and applies one shared
+scale to both axes:
+
+```text
+scale = kMaxCoordinateSpan / max(max_x - min_x, max_y - min_y)
+qx = round((x - min_x) * scale)
+qy = round((y - min_y) * scale)
+```
+
+Using one scale preserves aspect ratio; the shorter axis is not stretched to
+fill the grid. The resulting integers are triangulated with the same exact
+predicates as direct integer input. On platforms without `__int128`, the target
+span automatically falls back to the certified 64-bit limit.
+
+The returned `Triangle` values contain only indices, so callers recover the
+original float vertices without coordinate loss. The topology is nevertheless
+the topology of `(qx, qy)`, not necessarily of `(x, y)`. Quantization can merge
+nearby points, change an edge choice, change winding in nearly degenerate
+geometry, or perturb oblique collinearity. Axis-aligned collinearity is
+preserved. If fewer than three unique grid points remain, triangulation throws
+`std::invalid_argument`.
+
+`QuantizationReport` describes the actual mapping through `origin_x`,
+`origin_y`, `scale`, and `grid_step`; records the largest source-space error in
+either coordinate as `max_coordinate_error`; and reports `unique_points` and
+`collapsed_points`. A collapsed count includes both exact duplicate inputs and
+distinct float points that map to the same grid coordinate. NaN and infinity
+are rejected.
+
 ## How it works
 
 At a high level, Delaunay32:
@@ -217,7 +282,8 @@ At a high level, Delaunay32:
 3. constructs small divide-and-conquer leaves using exact orientation and
    in-circle predicates;
 4. merges neighboring triangulations through compact primal edge rings;
-5. marks the outer face and materializes counterclockwise triangle indices.
+5. marks the outer face and materializes indices that are counterclockwise in
+   the triangulation coordinates.
 
 For large inputs, radix sorting, independent subtrees, merge levels, and
 triangle export share a retained worker team. Small inputs stay serial to avoid
@@ -258,7 +324,33 @@ The default `--fresh` mode constructs and destroys a `Triangulator` for each
 measured sample, including working-storage and thread-pool lifetime. `--reuse`
 models repeated triangulations through one retained instance.
 
-## SVG example
+## SVG examples
+
+### Random float points
+
+`delaunay_float_example` is a compact end-to-end example of the quantized float
+API. It generates 5,000 deterministic random `FloatPoint` values, triangulates
+them with a `QuantizationReport`, prints the mapping and precision information,
+and writes an SVG using the unchanged source coordinates addressed by the
+returned triangle indices.
+
+```sh
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-debug --target delaunay_float_example --parallel
+./build-debug/delaunay_float_example float-mesh.svg
+```
+
+On macOS, inspect the result with:
+
+```sh
+open float-mesh.svg
+```
+
+The example keeps its point count, seed, and rectangular float bounds as named
+constants near the top of `examples/delaunay_float_example.cpp`, making them
+easy to change while keeping the API flow uncluttered.
+
+### Integer points and CSV input
 
 The dependency-free example accepts arbitrary signed integer points from a
 two-column CSV file:
@@ -303,15 +395,16 @@ production path stays readable.
 Included:
 
 - signed 32-bit integer coordinates
+- finite float coordinates through automatic uniform quantization
 - exact certified predicates
 - deterministic duplicate handling
 - serial and shared-memory parallel construction
-- counterclockwise triangle indices
+- triangle indices that are counterclockwise on the triangulation grid
 - up to `2^31 - 1` input entries, subject to available memory
 
 Not included:
 
-- floating-point input or automatic quantization
+- exact predicates on the unquantized floating-point coordinates
 - constrained edges, holes, or polygon clipping
 - dynamic insertion or deletion
 - Voronoi output

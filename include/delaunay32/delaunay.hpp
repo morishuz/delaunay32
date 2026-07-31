@@ -20,7 +20,17 @@ struct Point {
     std::int32_t y = 0;
 };
 
-// Counterclockwise indices into the caller's original point array.
+// A floating-point site for the convenience quantization API. Output triangle
+// indices always refer back to this original, unmodified input.
+struct FloatPoint {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+// Indices into the caller's original point array, counterclockwise in the
+// coordinates used for triangulation. For float input, that means the internal
+// quantized coordinates; near-degenerate source geometry may have a different
+// winding after the original float coordinates are restored.
 struct Triangle {
     std::uint32_t i0 = 0;
     std::uint32_t i1 = 0;
@@ -31,6 +41,18 @@ enum class PredicateWidth {
     Int64,
     Int128,
     Unsupported,
+};
+
+// Describes the uniform source-to-integer mapping used by triangulate_float().
+// Quantized coordinates are round((value - origin) * scale).
+struct QuantizationReport {
+    double origin_x = 0.0;
+    double origin_y = 0.0;
+    double scale = 0.0;
+    double grid_step = 0.0;
+    double max_coordinate_error = 0.0;
+    std::size_t unique_points = 0;
+    std::size_t collapsed_points = 0;
 };
 
 // Integer divide-and-conquer triangulator using a compact two-dart primal
@@ -71,12 +93,25 @@ public:
 
     // Coincident sites are collapsed deterministically. Triangles reference
     // the lowest original input index for each retained site.
-    std::vector<Triangle> triangulate(const std::vector<Point>& points);
+    std::vector<Triangle> triangulate_int(
+        const std::vector<Point>& points);
     // Struct-of-arrays overload for callers that already store x/y separately.
     std::vector<Triangle> triangulate_int(
         const std::int32_t* xs,
         const std::int32_t* ys,
         std::size_t point_count);
+    // Uniformly quantizes finite float coordinates into the largest certified
+    // integer square domain. The returned indices still reference the original
+    // float input; only topology decisions use the quantized coordinates.
+    std::vector<Triangle> triangulate_float(
+        const std::vector<FloatPoint>& points,
+        QuantizationReport* report = nullptr);
+    // Struct-of-arrays overload for existing float coordinate buffers.
+    std::vector<Triangle> triangulate_float(
+        const float* xs,
+        const float* ys,
+        std::size_t point_count,
+        QuantizationReport* report = nullptr);
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
@@ -181,6 +216,12 @@ private:
 
     static void require_point_count(std::size_t point_count);
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
+    template <typename XAt, typename YAt>
+    std::vector<Triangle> triangulate_float_impl(
+        std::size_t point_count,
+        XAt x_at,
+        YAt y_at,
+        QuantizationReport* report);
     void triangulate_loaded_points();
     void sort_points_morton(
         std::size_t thread_count,

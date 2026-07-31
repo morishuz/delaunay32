@@ -4,6 +4,7 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -28,6 +29,97 @@ Triangulator& Triangulator::operator=(
     Triangulator&&) noexcept = default;
 
 namespace {
+
+struct FloatBounds {
+    double min_x = 0.0;
+    double min_y = 0.0;
+    double max_x = 0.0;
+    double max_y = 0.0;
+};
+
+struct FloatQuantizer {
+    double origin_x = 0.0;
+    double origin_y = 0.0;
+    double scale = 0.0;
+    double target_span = 0.0;
+
+    std::int32_t quantize(double value, double origin) const {
+        if (scale == 0.0) {
+            return 0;
+        }
+        const double mapped = std::clamp(
+            (value - origin) * scale,
+            0.0,
+            target_span);
+        return static_cast<std::int32_t>(std::llround(mapped));
+    }
+
+    double error(
+        double value,
+        double origin,
+        std::int32_t quantized) const {
+        if (scale == 0.0) {
+            return 0.0;
+        }
+        const double reconstructed =
+            origin + static_cast<double>(quantized) / scale;
+        return std::abs(reconstructed - value);
+    }
+};
+
+template <typename XAt, typename YAt>
+FloatBounds find_float_bounds(
+    std::size_t point_count,
+    XAt x_at,
+    YAt y_at) {
+    const double first_x = x_at(0);
+    const double first_y = y_at(0);
+    if (!std::isfinite(first_x) || !std::isfinite(first_y)) {
+        throw std::invalid_argument("float coordinates must be finite");
+    }
+
+    FloatBounds bounds{first_x, first_y, first_x, first_y};
+    for (std::size_t i = 1; i < point_count; ++i) {
+        const double x = x_at(i);
+        const double y = y_at(i);
+        if (!std::isfinite(x) || !std::isfinite(y)) {
+            throw std::invalid_argument("float coordinates must be finite");
+        }
+        bounds.min_x = std::min(bounds.min_x, x);
+        bounds.min_y = std::min(bounds.min_y, y);
+        bounds.max_x = std::max(bounds.max_x, x);
+        bounds.max_y = std::max(bounds.max_y, y);
+    }
+    return bounds;
+}
+
+FloatQuantizer make_float_quantizer(const FloatBounds& bounds) {
+    const double maximum_span = std::max(
+        bounds.max_x - bounds.min_x,
+        bounds.max_y - bounds.min_y);
+    const double target_span =
+        static_cast<double>(Triangulator::kMaxCoordinateSpan);
+    return {
+        bounds.min_x,
+        bounds.min_y,
+        maximum_span == 0.0 ? 0.0 : target_span / maximum_span,
+        target_span,
+    };
+}
+
+void initialize_quantization_report(
+    QuantizationReport* report,
+    const FloatQuantizer& quantizer) {
+    if (report == nullptr) {
+        return;
+    }
+    *report = {};
+    report->origin_x = quantizer.origin_x;
+    report->origin_y = quantizer.origin_y;
+    report->scale = quantizer.scale;
+    report->grid_step =
+        quantizer.scale == 0.0 ? 0.0 : 1.0 / quantizer.scale;
+}
 
 // Shared predicate-span checks for Int64 vs Int128 certification.
 template <typename UnsignedWide>
@@ -149,7 +241,7 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 #endif
 }
 
-std::vector<Triangle> Triangulator::triangulate(
+std::vector<Triangle> Triangulator::triangulate_int(
     const std::vector<Point>& points) {
     require_point_count(points.size());
     points_.resize(points.size());
@@ -193,6 +285,84 @@ std::vector<Triangle> Triangulator::triangulate_int(
     }
     triangulate_loaded_points();
     return std::move(triangles_out_);
+}
+
+template <typename XAt, typename YAt>
+std::vector<Triangle> Triangulator::triangulate_float_impl(
+    std::size_t point_count,
+    XAt x_at,
+    YAt y_at,
+    QuantizationReport* report) {
+    const FloatBounds bounds = find_float_bounds(
+        point_count, x_at, y_at);
+    const FloatQuantizer quantizer = make_float_quantizer(bounds);
+    initialize_quantization_report(report, quantizer);
+
+    points_.resize(point_count);
+    for (std::size_t i = 0; i < point_count; ++i) {
+        const double input_x = x_at(i);
+        const double input_y = y_at(i);
+        const std::int32_t x = quantizer.quantize(
+            input_x, quantizer.origin_x);
+        const std::int32_t y = quantizer.quantize(
+            input_y, quantizer.origin_y);
+        if (i == 0) {
+            min_x_ = max_x_ = x;
+            min_y_ = max_y_ = y;
+        } else {
+            min_x_ = std::min(min_x_, x);
+            max_x_ = std::max(max_x_, x);
+            min_y_ = std::min(min_y_, y);
+            max_y_ = std::max(max_y_, y);
+        }
+        points_[i] = {x, y, static_cast<std::uint32_t>(i), 0};
+        if (report != nullptr) {
+            report->max_coordinate_error = std::max({
+                report->max_coordinate_error,
+                quantizer.error(input_x, quantizer.origin_x, x),
+                quantizer.error(input_y, quantizer.origin_y, y),
+            });
+        }
+    }
+    triangulate_loaded_points();
+    if (report != nullptr) {
+        report->unique_points = points_.size();
+        report->collapsed_points = point_count - points_.size();
+    }
+    return std::move(triangles_out_);
+}
+
+std::vector<Triangle> Triangulator::triangulate_float(
+    const std::vector<FloatPoint>& points,
+    QuantizationReport* report) {
+    if (report != nullptr) {
+        *report = {};
+    }
+    require_point_count(points.size());
+    return triangulate_float_impl(
+        points.size(),
+        [&](std::size_t i) { return points[i].x; },
+        [&](std::size_t i) { return points[i].y; },
+        report);
+}
+
+std::vector<Triangle> Triangulator::triangulate_float(
+    const float* xs,
+    const float* ys,
+    std::size_t point_count,
+    QuantizationReport* report) {
+    if (report != nullptr) {
+        *report = {};
+    }
+    require_point_count(point_count);
+    if (xs == nullptr || ys == nullptr) {
+        throw std::invalid_argument("coordinate arrays must not be null");
+    }
+    return triangulate_float_impl(
+        point_count,
+        [&](std::size_t i) { return xs[i]; },
+        [&](std::size_t i) { return ys[i]; },
+        report);
 }
 
 void Triangulator::triangulate_loaded_points() {

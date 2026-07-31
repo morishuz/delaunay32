@@ -243,26 +243,26 @@ Row benchmark_case(
     delaunator.prepare(points);
     std::vector<Triangle> reference =
         delaunator.triangulate_prepared();
-    std::vector<Triangle> serial_output = serial.triangulate(points);
+    std::vector<Triangle> serial_output = serial.triangulate_int(points);
     std::vector<Triangle> parallel_output =
-        parallel.triangulate(points);
+        parallel.triangulate_int(points);
     require_valid("serial Delaunay32", points, serial_output, reference);
     require_valid("parallel Delaunay32", points, parallel_output, reference);
 
     const auto [warmups, iterations] = repetitions(point_count, quick);
     const auto run_serial = [&] {
         if (reuse) {
-            return serial.triangulate(points);
+            return serial.triangulate_int(points);
         }
         Triangulator one_shot(1);
-        return one_shot.triangulate(points);
+        return one_shot.triangulate_int(points);
     };
     const auto run_parallel = [&] {
         if (reuse) {
-            return parallel.triangulate(points);
+            return parallel.triangulate_int(points);
         }
         Triangulator one_shot(0);
-        return one_shot.triangulate(points);
+        return one_shot.triangulate_int(points);
     };
     const auto run_delaunator = [&] {
         return delaunator.triangulate_prepared();

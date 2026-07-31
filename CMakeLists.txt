@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(delaunay32 VERSION 0.1.0 LANGUAGES CXX)
+project(delaunay32 VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -17,7 +17,7 @@ option(
     ${DELAUNAY32_TOP_LEVEL})
 option(
     DELAUNAY32_BUILD_EXAMPLES
-    "Build the dependency-free SVG example"
+    "Build the dependency-free SVG examples"
     ${DELAUNAY32_TOP_LEVEL})
 option(
     DELAUNAY32_BUILD_TESTS
@@ -63,6 +63,16 @@ if(DELAUNAY32_BUILD_EXAMPLES)
     target_link_libraries(
         delaunay_svg_example PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_svg_example)
+
+    add_executable(
+        delaunay_float_example
+        examples/delaunay_float_example.cpp
+        examples/svg_io.cpp
+        examples/svg_io.hpp
+    )
+    target_link_libraries(
+        delaunay_float_example PRIVATE delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay_float_example)
 endif()
 
 set(DELAUNATOR_HEADER
@@ -131,6 +141,10 @@ if(DELAUNAY32_BUILD_TESTS)
                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_collinear.csv"
                     --output
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-collinear-smoke.svg")
+        add_test(
+            NAME float_svg_example
+            COMMAND delaunay_float_example
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-float-smoke.svg")
     endif()
 endif()
 
@@ -160,7 +174,7 @@ configure_package_config_file(
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/delaunay32ConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
+    COMPATIBILITY SameMinorVersion
 )
 install(
     FILES

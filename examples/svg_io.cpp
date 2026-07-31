@@ -187,30 +187,29 @@ std::uint64_t parse_seed(const char* value) {
     return seed;
 }
 
+template <typename PointType>
 struct SvgTransform {
-    std::int32_t min_x = 0;
-    std::int32_t max_x = 0;
-    std::int32_t min_y = 0;
-    std::int32_t max_y = 0;
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
     double scale = 1.0;
     double left = kPlotMargin;
     double top = kHeaderHeight + kPlotMargin;
     double canvas_width = kMinimumCanvasWidth;
     double canvas_height = kHeaderHeight + 2.0 * kPlotMargin;
 
-    explicit SvgTransform(const std::vector<Point>& points) {
+    explicit SvgTransform(const std::vector<PointType>& points) {
         min_x = max_x = points[0].x;
         min_y = max_y = points[0].y;
-        for (const Point& point : points) {
-            min_x = std::min(min_x, point.x);
-            max_x = std::max(max_x, point.x);
-            min_y = std::min(min_y, point.y);
-            max_y = std::max(max_y, point.y);
+        for (const PointType& point : points) {
+            min_x = std::min(min_x, static_cast<double>(point.x));
+            max_x = std::max(max_x, static_cast<double>(point.x));
+            min_y = std::min(min_y, static_cast<double>(point.y));
+            max_y = std::max(max_y, static_cast<double>(point.y));
         }
-        const double span_x = static_cast<double>(
-            static_cast<std::int64_t>(max_x) - min_x);
-        const double span_y = static_cast<double>(
-            static_cast<std::int64_t>(max_y) - min_y);
+        const double span_x = max_x - min_x;
+        const double span_y = max_y - min_y;
         if (span_x > 0.0 || span_y > 0.0) {
             const double x_scale =
                 span_x > 0.0
@@ -230,25 +229,20 @@ struct SvgTransform {
         left = (canvas_width - width) / 2.0;
     }
 
-    double x(std::int32_t value) const {
-        return left +
-               static_cast<double>(
-                   static_cast<std::int64_t>(value) - min_x) *
-                   scale;
+    double x(double value) const {
+        return left + (value - min_x) * scale;
     }
 
-    double y(std::int32_t value) const {
-        return top +
-               static_cast<double>(
-                   static_cast<std::int64_t>(max_y) - value) *
-                   scale;
+    double y(double value) const {
+        return top + (max_y - value) * scale;
     }
 };
 
+template <typename PointType>
 void write_point(
     std::ostream& output,
-    const Point& point,
-    const SvgTransform& transform) {
+    const PointType& point,
+    const SvgTransform<PointType>& transform) {
     output << std::fixed << std::setprecision(2)
            << transform.x(point.x) << ',' << transform.y(point.y);
 }
@@ -301,15 +295,17 @@ std::vector<Point> load_points(const Options& options) {
                : generate_points(options.point_count, options.seed);
 }
 
-void write_svg(
+template <typename PointType>
+void write_svg_impl(
     const std::string& output_path,
-    const std::vector<Point>& points,
-    const std::vector<Triangle>& triangles) {
+    const std::vector<PointType>& points,
+    const std::vector<Triangle>& triangles,
+    const delaunay32::QuantizationReport* report) {
     std::ofstream output(output_path);
     if (!output) {
         throw std::runtime_error("could not create SVG: " + output_path);
     }
-    const SvgTransform transform(points);
+    const SvgTransform<PointType> transform(points);
 
     static constexpr std::array<const char*, 7> colors = {
         "#dcefe8",
@@ -330,9 +326,16 @@ void write_svg(
         << transform.canvas_height << "\">\n"
         << "<rect width=\"100%\" height=\"100%\" fill=\"#f7f7f5\"/>\n"
         << "<text x=\"30\" y=\"35\" font-family=\"system-ui, sans-serif\" "
-           "font-size=\"18\" fill=\"#202426\">Delaunay32 | "
+           "font-size=\"18\" fill=\"#202426\">Delaunay32"
+        << (report != nullptr ? " float | " : " | ")
         << points.size() << " points | " << triangles.size()
-        << " triangles</text>\n";
+        << " triangles";
+    if (report != nullptr) {
+        output << " | grid step " << std::scientific << std::setprecision(3)
+               << report->grid_step << " | collapsed "
+               << report->collapsed_points;
+    }
+    output << "</text>\n";
 
     for (const Triangle& triangle : triangles) {
         const std::size_t color =
@@ -353,7 +356,7 @@ void write_svg(
 
     const double radius =
         points.size() <= 2000 ? 2.2 : (points.size() <= 20000 ? 1.1 : 0.55);
-    for (const Point& point : points) {
+    for (const PointType& point : points) {
         output << "<circle cx=\"" << std::fixed << std::setprecision(2)
                << transform.x(point.x) << "\" cy=\""
                << transform.y(point.y)
@@ -366,6 +369,21 @@ void write_svg(
         throw std::runtime_error(
             "failed while writing SVG: " + output_path);
     }
+}
+
+void write_svg(
+    const std::string& output_path,
+    const std::vector<Point>& points,
+    const std::vector<Triangle>& triangles) {
+    write_svg_impl(output_path, points, triangles, nullptr);
+}
+
+void write_svg(
+    const std::string& output_path,
+    const std::vector<delaunay32::FloatPoint>& points,
+    const std::vector<Triangle>& triangles,
+    const delaunay32::QuantizationReport& report) {
+    write_svg_impl(output_path, points, triangles, &report);
 }
 
 }  // namespace delaunay32_example
