@@ -239,14 +239,10 @@ private:
     static void require_point_count(std::size_t point_count);
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
     void load_int_points(const std::vector<Point>& points);
-    template <typename XAt, typename YAt>
-    PredicateWidth triangulate_float_impl(
-        std::size_t point_count,
-        XAt x_at,
-        YAt y_at,
-        QuantizationReport* report,
-        std::vector<std::uint32_t>* representatives);
-    void triangulate_loaded_points(
+    void load_float_points(
+        const std::vector<FloatPoint>& points,
+        QuantizationReport* report);
+    PredicateWidth triangulate_loaded_points(
         std::vector<std::uint32_t>* representatives = nullptr);
     TriangulationResult make_result(
         const QuantizationReport& quantization,

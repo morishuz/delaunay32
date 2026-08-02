@@ -408,7 +408,7 @@ void test_independent_concurrent_instances() {
                                 result.triangles.size() * 3 &&
                             !result.hull.empty() &&
                             result.representatives.size() == points.size(),
-                        "concurrent rich result omitted auxiliary data");
+                        "concurrent full result omitted auxiliary data");
                     outputs[i] = std::move(result.triangles);
                 } else {
                     outputs[i] = triangulator.triangulate_int(points);

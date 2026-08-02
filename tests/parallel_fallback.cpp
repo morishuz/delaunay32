@@ -52,19 +52,19 @@ void require_fallback_matches(
         support::meshes_equal(expected, repeated),
         label + ": reused triangulator produced a different fallback mesh");
 
-    const delaunay32::TriangulationResult rich =
+    const delaunay32::TriangulationResult full =
         parallel_with_fallback.triangulate_int_full(points);
     require(
-        support::meshes_equal(expected, rich.triangles),
-        label + ": rich result changed the fallback mesh");
+        support::meshes_equal(expected, full.triangles),
+        label + ": full result changed the fallback mesh");
     require(
-        rich.halfedges.size() == rich.triangles.size() * 3 &&
-            !rich.hull.empty() &&
-            rich.representatives.size() == points.size(),
-        label + ": rich fallback result omitted auxiliary data");
+        full.halfedges.size() == full.triangles.size() * 3 &&
+            !full.hull.empty() &&
+            full.representatives.size() == points.size(),
+        label + ": full fallback result omitted auxiliary data");
     require(
-        rich.actual_thread_count == 1,
-        label + ": rich result did not report serial fallback execution");
+        full.actual_thread_count == 1,
+        label + ": full result did not report serial fallback execution");
 }
 
 }  // namespace

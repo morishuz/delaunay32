@@ -85,7 +85,7 @@ std::uint32_t triangle_vertex(
     }
 }
 
-void require_rich_topology(
+void require_full_topology(
     const std::vector<Point>& points,
     const TriangulationResult& result,
     const std::string& label) {
@@ -293,7 +293,7 @@ void test_deterministic_cases() {
     }
 }
 
-void test_rich_integer_result() {
+void test_full_integer_result() {
     const std::vector<Point> points = {
         {0, 0},
         {10, 0},
@@ -310,28 +310,28 @@ void test_rich_integer_result() {
     Triangulator triangulator(4);
     const TriangulationResult result =
         triangulator.triangulate_int_full(points);
-    require(!result.triangles.empty(), "rich integer result is empty");
+    require(!result.triangles.empty(), "full integer result is empty");
     require(
         result.representatives == expected_representatives,
-        "rich integer representative mapping is incorrect");
+        "full integer representative mapping is incorrect");
     require(
         result.predicate_width == PredicateWidth::Int64,
-        "rich integer result reported the wrong predicate width");
+        "full integer result reported the wrong predicate width");
     require(
         result.actual_thread_count == 1,
-        "small rich integer result did not report serial execution");
+        "small full integer result did not report serial execution");
     require(
         result.quantization.scale == 0.0 &&
             result.quantization.unique_points == 0,
         "integer result unexpectedly contains quantization metadata");
-    require_rich_topology(points, result, "rich integer result");
+    require_full_topology(points, result, "full integer result");
 
     const std::vector<Triangle> triangle_only =
         triangulator.triangulate_int(points);
     require(
         benchmark_support::meshes_equal(
             result.triangles, triangle_only),
-        "rich and triangle-only integer APIs differ");
+        "full and triangle-only integer APIs differ");
 
     const std::vector<Point> collinear = {
         {3, 7}, {-4, 7}, {9, 7}, {0, 7},
@@ -341,10 +341,10 @@ void test_rich_integer_result() {
     require(
         collinear_result.triangles.empty() &&
             collinear_result.halfedges.empty(),
-        "collinear rich result contains faces or halfedges");
+        "collinear full result contains faces or halfedges");
     require(
         collinear_result.hull == std::vector<std::uint32_t>({1, 2}),
-        "collinear rich result does not contain its endpoints");
+        "collinear full result does not contain its endpoints");
 }
 
 void test_float_api() {
@@ -431,7 +431,7 @@ void test_float_quantization_collisions() {
         "full-range float mesh differs from integer quantization");
 }
 
-void test_rich_float_result() {
+void test_full_float_result() {
     const float maximum = std::numeric_limits<float>::max();
     const std::vector<FloatPoint> points = {
         {-maximum, -maximum},
@@ -451,23 +451,23 @@ void test_rich_float_result() {
     require(
         result.quantization.unique_points == 5 &&
             result.quantization.collapsed_points == 1,
-        "rich float result has incorrect quantization counts");
+        "full float result has incorrect quantization counts");
     require(
         result.representatives == expected_representatives,
-        "rich float representative mapping is incorrect");
+        "full float representative mapping is incorrect");
     require(
         result.predicate_width != PredicateWidth::Unsupported,
-        "rich float result reported unsupported predicates");
+        "full float result reported unsupported predicates");
     const std::vector<Point> quantized =
         quantize_from_report(points, result.quantization);
-    require_rich_topology(quantized, result, "rich float result");
+    require_full_topology(quantized, result, "full float result");
 
     const std::vector<Triangle> triangle_only =
         triangulator.triangulate_float(points);
     require(
         benchmark_support::meshes_equal(
             result.triangles, triangle_only),
-        "rich and triangle-only float APIs differ");
+        "full and triangle-only float APIs differ");
 }
 
 void test_float_parallel() {
@@ -493,30 +493,30 @@ void test_float_parallel() {
         benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
         "serial and parallel float triangle sets differ");
 
-    const TriangulationResult rich =
+    const TriangulationResult full =
         parallel.triangulate_float_full(points);
     require(
-        benchmark_support::meshes_equal(serial_mesh, rich.triangles),
-        "parallel rich float triangle set differs");
+        benchmark_support::meshes_equal(serial_mesh, full.triangles),
+        "parallel full float triangle set differs");
     require(
-        rich.quantization.unique_points == points.size() &&
-            rich.quantization.collapsed_points == 0,
+        full.quantization.unique_points == points.size() &&
+            full.quantization.collapsed_points == 0,
         "parallel float quantization unexpectedly collapsed points");
     require(
-        rich.actual_thread_count == 2,
-        "parallel rich result reported the wrong actual thread count");
+        full.actual_thread_count == 2,
+        "parallel full result reported the wrong actual thread count");
     require(
-        rich.representatives.size() == points.size(),
-        "parallel rich result omitted representative entries");
-    for (std::size_t i = 0; i < rich.representatives.size(); ++i) {
+        full.representatives.size() == points.size(),
+        "parallel full result omitted representative entries");
+    for (std::size_t i = 0; i < full.representatives.size(); ++i) {
         require(
-            rich.representatives[i] == i,
-            "parallel rich result changed a unique representative");
+            full.representatives[i] == i,
+            "parallel full result changed a unique representative");
     }
-    require_rich_topology(
-        quantize_from_report(points, rich.quantization),
-        rich,
-        "parallel rich float result");
+    require_full_topology(
+        quantize_from_report(points, full.quantization),
+        full,
+        "parallel full float result");
 }
 
 void test_float_collinear_input() {
@@ -717,10 +717,10 @@ int main() {
     try {
         delaunay32::test_predicate_selection();
         delaunay32::test_deterministic_cases();
-        delaunay32::test_rich_integer_result();
+        delaunay32::test_full_integer_result();
         delaunay32::test_float_api();
         delaunay32::test_float_quantization_collisions();
-        delaunay32::test_rich_float_result();
+        delaunay32::test_full_float_result();
         delaunay32::test_float_parallel();
         delaunay32::test_float_collinear_input();
         delaunay32::test_duplicates();
@@ -729,7 +729,7 @@ int main() {
         delaunay32::test_invalid_inputs();
         std::cout
             << "validation passed: deterministic, duplicate, collinear, "
-               "integer/float/rich API, predicate-width, and parallel "
+               "integer/float/full API, predicate-width, and parallel "
                "cases\n";
         return 0;
     } catch (const std::exception& error) {

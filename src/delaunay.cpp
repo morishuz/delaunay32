@@ -67,21 +67,17 @@ struct FloatQuantizer {
     }
 };
 
-template <typename XAt, typename YAt>
-FloatBounds find_float_bounds(
-    std::size_t point_count,
-    XAt x_at,
-    YAt y_at) {
-    const double first_x = x_at(0);
-    const double first_y = y_at(0);
+FloatBounds find_float_bounds(const std::vector<FloatPoint>& points) {
+    const double first_x = points[0].x;
+    const double first_y = points[0].y;
     if (!std::isfinite(first_x) || !std::isfinite(first_y)) {
         throw std::invalid_argument("float coordinates must be finite");
     }
 
     FloatBounds bounds{first_x, first_y, first_x, first_y};
-    for (std::size_t i = 1; i < point_count; ++i) {
-        const double x = x_at(i);
-        const double y = y_at(i);
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        const double x = points[i].x;
+        const double y = points[i].y;
         if (!std::isfinite(x) || !std::isfinite(y)) {
             throw std::invalid_argument("float coordinates must be finite");
         }
@@ -270,22 +266,17 @@ std::vector<Triangle> Triangulator::triangulate_int(
     return std::move(triangles_out_);
 }
 
-template <typename XAt, typename YAt>
-PredicateWidth Triangulator::triangulate_float_impl(
-    std::size_t point_count,
-    XAt x_at,
-    YAt y_at,
-    QuantizationReport* report,
-    std::vector<std::uint32_t>* representatives) {
-    const FloatBounds bounds = find_float_bounds(
-        point_count, x_at, y_at);
+void Triangulator::load_float_points(
+    const std::vector<FloatPoint>& points,
+    QuantizationReport* report) {
+    const FloatBounds bounds = find_float_bounds(points);
     const FloatQuantizer quantizer = make_float_quantizer(bounds);
     initialize_quantization_report(report, quantizer);
 
-    points_.resize(point_count);
-    for (std::size_t i = 0; i < point_count; ++i) {
-        const double input_x = x_at(i);
-        const double input_y = y_at(i);
+    points_.resize(points.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const double input_x = points[i].x;
+        const double input_y = points[i].y;
         const std::int32_t x = quantizer.quantize(
             input_x, quantizer.origin_x);
         const std::int32_t y = quantizer.quantize(
@@ -308,28 +299,13 @@ PredicateWidth Triangulator::triangulate_float_impl(
             });
         }
     }
-    const PredicateWidth predicate_width = predicate_width_for_spans(
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_x_) - min_x_),
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_y_) - min_y_));
-    triangulate_loaded_points(representatives);
-    if (report != nullptr) {
-        report->unique_points = points_.size();
-        report->collapsed_points = point_count - points_.size();
-    }
-    return predicate_width;
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
     const std::vector<FloatPoint>& points) {
     require_point_count(points.size());
-    triangulate_float_impl(
-        points.size(),
-        [&](std::size_t i) { return points[i].x; },
-        [&](std::size_t i) { return points[i].y; },
-        nullptr,
-        nullptr);
+    load_float_points(points, nullptr);
+    triangulate_loaded_points();
     return std::move(triangles_out_);
 }
 
@@ -337,13 +313,9 @@ TriangulationResult Triangulator::triangulate_int_full(
     const std::vector<Point>& points) {
     require_point_count(points.size());
     load_int_points(points);
-    const PredicateWidth predicate_width = predicate_width_for_spans(
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_x_) - min_x_),
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_y_) - min_y_));
     std::vector<std::uint32_t> representatives;
-    triangulate_loaded_points(&representatives);
+    const PredicateWidth predicate_width =
+        triangulate_loaded_points(&representatives);
     return make_result(
         {}, predicate_width, std::move(representatives));
 }
@@ -352,20 +324,19 @@ TriangulationResult Triangulator::triangulate_float_full(
     const std::vector<FloatPoint>& points) {
     require_point_count(points.size());
     QuantizationReport report;
+    load_float_points(points, &report);
     std::vector<std::uint32_t> representatives;
-    const PredicateWidth predicate_width = triangulate_float_impl(
-        points.size(),
-        [&](std::size_t i) { return points[i].x; },
-        [&](std::size_t i) { return points[i].y; },
-        &report,
-        &representatives);
+    const PredicateWidth predicate_width =
+        triangulate_loaded_points(&representatives);
+    report.unique_points = points_.size();
+    report.collapsed_points = points.size() - points_.size();
     return make_result(
         report,
         predicate_width,
         std::move(representatives));
 }
 
-void Triangulator::triangulate_loaded_points(
+PredicateWidth Triangulator::triangulate_loaded_points(
     std::vector<std::uint32_t>* representatives) {
     std::size_t point_count = points_.size();
     if (representatives != nullptr) {
@@ -576,6 +547,7 @@ void Triangulator::triangulate_loaded_points(
     } else {
         export_triangles();
     }
+    return predicate_width;
 }
 
 void Triangulator::sort_points_morton(
