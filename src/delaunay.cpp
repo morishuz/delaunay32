@@ -241,18 +241,14 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 #endif
 }
 
-template <typename XAt, typename YAt>
-void Triangulator::load_int_points(
-    std::size_t point_count,
-    XAt x_at,
-    YAt y_at) {
-    points_.resize(point_count);
-    min_x_ = max_x_ = x_at(0);
-    min_y_ = max_y_ = y_at(0);
+void Triangulator::load_int_points(const std::vector<Point>& points) {
+    points_.resize(points.size());
+    min_x_ = max_x_ = points[0].x;
+    min_y_ = max_y_ = points[0].y;
     points_[0] = {min_x_, min_y_, 0, 0};
-    for (std::size_t i = 1; i < point_count; ++i) {
-        const std::int32_t x = x_at(i);
-        const std::int32_t y = y_at(i);
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        const std::int32_t x = points[i].x;
+        const std::int32_t y = points[i].y;
         min_x_ = std::min(min_x_, x);
         max_x_ = std::max(max_x_, x);
         min_y_ = std::min(min_y_, y);
@@ -269,22 +265,7 @@ void Triangulator::load_int_points(
 std::vector<Triangle> Triangulator::triangulate_int(
     const std::vector<Point>& points) {
     require_point_count(points.size());
-    points_.resize(points.size());
-    min_x_ = max_x_ = points[0].x;
-    min_y_ = max_y_ = points[0].y;
-    points_[0] = {points[0].x, points[0].y, 0, 0};
-    for (std::size_t i = 1; i < points.size(); ++i) {
-        min_x_ = std::min(min_x_, points[i].x);
-        max_x_ = std::max(max_x_, points[i].x);
-        min_y_ = std::min(min_y_, points[i].y);
-        max_y_ = std::max(max_y_, points[i].y);
-        points_[i] = {
-            points[i].x,
-            points[i].y,
-            static_cast<std::uint32_t>(i),
-            0,
-        };
-    }
+    load_int_points(points);
     triangulate_loaded_points();
     return std::move(triangles_out_);
 }
@@ -355,10 +336,7 @@ std::vector<Triangle> Triangulator::triangulate_float(
 TriangulationResult Triangulator::triangulate_int_full(
     const std::vector<Point>& points) {
     require_point_count(points.size());
-    load_int_points(
-        points.size(),
-        [&](std::size_t i) { return points[i].x; },
-        [&](std::size_t i) { return points[i].y; });
+    load_int_points(points);
     const PredicateWidth predicate_width = predicate_width_for_spans(
         static_cast<std::uint64_t>(
             static_cast<std::int64_t>(max_x_) - min_x_),

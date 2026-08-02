@@ -238,11 +238,7 @@ private:
 
     static void require_point_count(std::size_t point_count);
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
-    template <typename XAt, typename YAt>
-    void load_int_points(
-        std::size_t point_count,
-        XAt x_at,
-        YAt y_at);
+    void load_int_points(const std::vector<Point>& points);
     template <typename XAt, typename YAt>
     PredicateWidth triangulate_float_impl(
         std::size_t point_count,
