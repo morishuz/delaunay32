@@ -208,12 +208,10 @@ std::vector<delaunay32::FloatPoint> points = {
     {-1.0F, 5.0F},
 };
 
-delaunay32::QuantizationReport report;
 const std::vector<delaunay32::Triangle> triangles =
-    triangulator.triangulate_float(points, report);
+    triangulator.triangulate_float(points);
 
-// Triangle indices address the unchanged FloatPoint vector. The report shows
-// the grid step, measured coordinate error, and any quantized point collisions.
+// Triangle indices address the unchanged FloatPoint vector.
 for (const auto& triangle : triangles) {
     const auto& a = points[triangle.i0];
     const auto& b = points[triangle.i1];
@@ -222,7 +220,9 @@ for (const auto& triangle : triangles) {
 }
 ```
 
-Use `triangulate_float(points)` when the quantization details are not needed.
+Use `triangulate_float_full(points)` when quantization details, adjacency, the
+convex hull, or representative mappings are needed. Its `quantization` field
+reports the grid step, measured coordinate error, and point collisions.
 
 The returned vertices retain their original precision. The connectivity is
 computed on the internal integer grid, so edge choices can differ from an exact

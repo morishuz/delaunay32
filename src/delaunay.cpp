@@ -352,20 +352,6 @@ std::vector<Triangle> Triangulator::triangulate_float(
     return std::move(triangles_out_);
 }
 
-std::vector<Triangle> Triangulator::triangulate_float(
-    const std::vector<FloatPoint>& points,
-    QuantizationReport& report) {
-    report = {};
-    require_point_count(points.size());
-    triangulate_float_impl(
-        points.size(),
-        [&](std::size_t i) { return points[i].x; },
-        [&](std::size_t i) { return points[i].y; },
-        &report,
-        nullptr);
-    return std::move(triangles_out_);
-}
-
 TriangulationResult Triangulator::triangulate_int_full(
     const std::vector<Point>& points) {
     require_point_count(points.size());

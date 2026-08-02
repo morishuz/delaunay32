@@ -359,9 +359,10 @@ void test_float_api() {
     const std::vector<FloatPoint> original = points;
 
     Triangulator triangulator;
-    QuantizationReport report;
-    const std::vector<Triangle> vector_mesh =
-        triangulator.triangulate_float(points, report);
+    const TriangulationResult result =
+        triangulator.triangulate_float_full(points);
+    const QuantizationReport& report = result.quantization;
+    const std::vector<Triangle>& vector_mesh = result.triangles;
     require(!vector_mesh.empty(), "float input produced no triangles");
     require(report.scale > 0.0, "float quantization scale is not positive");
     require(report.grid_step > 0.0, "float grid step is not positive");
@@ -389,11 +390,11 @@ void test_float_api() {
         benchmark_support::meshes_equal(vector_mesh, integer_mesh),
         "float API differs from its reported integer quantization");
 
-    const std::vector<Triangle> no_report_mesh =
+    const std::vector<Triangle> triangle_only_mesh =
         triangulator.triangulate_float(points);
     require(
-        benchmark_support::meshes_equal(vector_mesh, no_report_mesh),
-        "vector float report overload changed the mesh");
+        benchmark_support::meshes_equal(vector_mesh, triangle_only_mesh),
+        "full and triangle-only float APIs differ");
 }
 
 void test_float_quantization_collisions() {
@@ -408,9 +409,10 @@ void test_float_quantization_collisions() {
     };
 
     Triangulator triangulator;
-    QuantizationReport report;
-    const std::vector<Triangle> candidate =
-        triangulator.triangulate_float(points, report);
+    const TriangulationResult result =
+        triangulator.triangulate_float_full(points);
+    const QuantizationReport& report = result.quantization;
+    const std::vector<Triangle>& candidate = result.triangles;
     require(
         report.unique_points == 5 && report.collapsed_points == 1,
         "full-range float collision was not reported");
@@ -460,18 +462,12 @@ void test_rich_float_result() {
         quantize_from_report(points, result.quantization);
     require_rich_topology(quantized, result, "rich float result");
 
-    QuantizationReport report;
     const std::vector<Triangle> triangle_only =
-        triangulator.triangulate_float(points, report);
+        triangulator.triangulate_float(points);
     require(
         benchmark_support::meshes_equal(
             result.triangles, triangle_only),
         "rich and triangle-only float APIs differ");
-    require(
-        report.scale == result.quantization.scale &&
-            report.max_coordinate_error ==
-                result.quantization.max_coordinate_error,
-        "rich and triangle-only float quantization reports differ");
 }
 
 void test_float_parallel() {
@@ -491,13 +487,8 @@ void test_float_parallel() {
     Triangulator parallel(2);
     const std::vector<Triangle> serial_mesh =
         serial.triangulate_float(points);
-    QuantizationReport report;
     const std::vector<Triangle> parallel_mesh =
-        parallel.triangulate_float(points, report);
-    require(
-        report.unique_points == points.size() &&
-            report.collapsed_points == 0,
-        "parallel float quantization unexpectedly collapsed points");
+        parallel.triangulate_float(points);
     require(
         benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
         "serial and parallel float triangle sets differ");
@@ -507,6 +498,10 @@ void test_float_parallel() {
     require(
         benchmark_support::meshes_equal(serial_mesh, rich.triangles),
         "parallel rich float triangle set differs");
+    require(
+        rich.quantization.unique_points == points.size() &&
+            rich.quantization.collapsed_points == 0,
+        "parallel float quantization unexpectedly collapsed points");
     require(
         rich.actual_thread_count == 2,
         "parallel rich result reported the wrong actual thread count");

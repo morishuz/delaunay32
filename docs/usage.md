@@ -32,7 +32,6 @@ representative mappings, and operation metadata.
 |:--|:--|:--|
 | `std::vector<Point>` | signed 32-bit integers | `triangulate_int(points)` |
 | `std::vector<FloatPoint>` | 32-bit floats | `triangulate_float(points)` |
-| `std::vector<FloatPoint>` with mapping report | 32-bit floats | `triangulate_float(points, report)` |
 | `std::vector<Point>` with full output | integers | `triangulate_int_full(points)` |
 | `std::vector<FloatPoint>` with full output | floats | `triangulate_float_full(points)` |
 
@@ -118,12 +117,12 @@ for a particular input.
 
 ### `QuantizationReport`
 
-`QuantizationReport` is an optional output report. It does not configure or
-perform quantization, and passing it does not change the resulting mesh.
+`QuantizationReport` describes the mapping used by a completed full float
+triangulation. It does not configure or perform quantization.
 
 ```cpp
-delaunay32::QuantizationReport report;
-const auto triangles = triangulator.triangulate_float(points, report);
+const auto result = triangulator.triangulate_float_full(points);
+const delaunay32::QuantizationReport& report = result.quantization;
 ```
 
 Inspect its fields only after a successful triangulation call:
@@ -289,11 +288,11 @@ for (const auto& triangle : triangles) {
 }
 ```
 
-Request a report when the mapping precision or grid collisions matter:
+Request the full result when the mapping precision or grid collisions matter:
 
 ```cpp
-delaunay32::QuantizationReport report;
-const auto triangles = triangulator.triangulate_float(points, report);
+const auto result = triangulator.triangulate_float_full(points);
+const auto& report = result.quantization;
 
 if (report.collapsed_points != 0) {
     // Some input points shared a quantized grid coordinate.

@@ -43,7 +43,8 @@ enum class PredicateWidth {
     Unsupported,
 };
 
-// Describes the uniform source-to-integer mapping used by triangulate_float().
+// Describes the uniform source-to-integer mapping used by float triangulation.
+// Returned as TriangulationResult::quantization by triangulate_float_full().
 // Quantized coordinates are round((value - origin) * scale).
 struct QuantizationReport {
     double origin_x = 0.0;
@@ -123,9 +124,6 @@ public:
     // float input; only topology decisions use the quantized coordinates.
     std::vector<Triangle> triangulate_float(
         const std::vector<FloatPoint>& points);
-    std::vector<Triangle> triangulate_float(
-        const std::vector<FloatPoint>& points,
-        QuantizationReport& report);
 
     // Opt-in complete results. Existing triangle-only overloads do not
     // construct adjacency, hull, or representative vectors.

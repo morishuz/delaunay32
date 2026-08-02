@@ -32,10 +32,7 @@ int main() {
         {0.0F, 1.0F},
         {0.5F, 0.5F},
     };
-    delaunay32::QuantizationReport report;
-    if (triangulator.triangulate_float(float_points, report).size() != 4 ||
-        report.unique_points != float_points.size() ||
-        report.collapsed_points != 0) {
+    if (triangulator.triangulate_float(float_points).size() != 4) {
         return 3;
     }
     const delaunay32::TriangulationResult float_result =
