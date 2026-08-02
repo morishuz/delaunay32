@@ -9,7 +9,6 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -120,32 +119,6 @@ void initialize_quantization_report(
     report->scale = quantizer.scale;
     report->grid_step =
         quantizer.scale == 0.0 ? 0.0 : 1.0 / quantizer.scale;
-}
-
-std::uint64_t coordinate_key(
-    std::int32_t x,
-    std::int32_t y) {
-    return (static_cast<std::uint64_t>(
-                static_cast<std::uint32_t>(x))
-            << 32U) |
-           static_cast<std::uint32_t>(y);
-}
-
-template <typename XAt, typename YAt>
-std::vector<std::uint32_t> build_representatives(
-    std::size_t point_count,
-    XAt x_at,
-    YAt y_at) {
-    std::vector<std::uint32_t> representatives(point_count);
-    std::unordered_map<std::uint64_t, std::uint32_t> first_at_coordinate;
-    first_at_coordinate.reserve(point_count);
-    for (std::size_t i = 0; i < point_count; ++i) {
-        const std::uint32_t original = static_cast<std::uint32_t>(i);
-        const auto [iterator, inserted] = first_at_coordinate.emplace(
-            coordinate_key(x_at(i), y_at(i)), original);
-        representatives[i] = inserted ? original : iterator->second;
-    }
-    return representatives;
 }
 
 // Shared predicate-span checks for Int64 vs Int128 certification.
@@ -316,29 +289,6 @@ std::vector<Triangle> Triangulator::triangulate_int(
     return std::move(triangles_out_);
 }
 
-std::vector<Triangle> Triangulator::triangulate_int(
-    const std::int32_t* xs,
-    const std::int32_t* ys,
-    std::size_t point_count) {
-    require_point_count(point_count);
-    if (xs == nullptr || ys == nullptr) {
-        throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    points_.resize(point_count);
-    min_x_ = max_x_ = xs[0];
-    min_y_ = max_y_ = ys[0];
-    points_[0] = {xs[0], ys[0], 0, 0};
-    for (std::size_t i = 1; i < point_count; ++i) {
-        min_x_ = std::min(min_x_, xs[i]);
-        max_x_ = std::max(max_x_, xs[i]);
-        min_y_ = std::min(min_y_, ys[i]);
-        max_y_ = std::max(max_y_, ys[i]);
-        points_[i] = {xs[i], ys[i], static_cast<std::uint32_t>(i), 0};
-    }
-    triangulate_loaded_points();
-    return std::move(triangles_out_);
-}
-
 template <typename XAt, typename YAt>
 PredicateWidth Triangulator::triangulate_float_impl(
     std::size_t point_count,
@@ -352,11 +302,6 @@ PredicateWidth Triangulator::triangulate_float_impl(
     initialize_quantization_report(report, quantizer);
 
     points_.resize(point_count);
-    std::unordered_map<std::uint64_t, std::uint32_t> first_at_coordinate;
-    if (representatives != nullptr) {
-        representatives->resize(point_count);
-        first_at_coordinate.reserve(point_count);
-    }
     for (std::size_t i = 0; i < point_count; ++i) {
         const double input_x = x_at(i);
         const double input_y = y_at(i);
@@ -374,13 +319,6 @@ PredicateWidth Triangulator::triangulate_float_impl(
             max_y_ = std::max(max_y_, y);
         }
         points_[i] = {x, y, static_cast<std::uint32_t>(i), 0};
-        if (representatives != nullptr) {
-            const std::uint32_t original = static_cast<std::uint32_t>(i);
-            const auto [iterator, inserted] = first_at_coordinate.emplace(
-                coordinate_key(x, y), original);
-            (*representatives)[i] =
-                inserted ? original : iterator->second;
-        }
         if (report != nullptr) {
             report->max_coordinate_error = std::max({
                 report->max_coordinate_error,
@@ -394,7 +332,7 @@ PredicateWidth Triangulator::triangulate_float_impl(
             static_cast<std::int64_t>(max_x_) - min_x_),
         static_cast<std::uint64_t>(
             static_cast<std::int64_t>(max_y_) - min_y_));
-    triangulate_loaded_points();
+    triangulate_loaded_points(representatives);
     if (report != nullptr) {
         report->unique_points = points_.size();
         report->collapsed_points = point_count - points_.size();
@@ -428,42 +366,6 @@ std::vector<Triangle> Triangulator::triangulate_float(
     return std::move(triangles_out_);
 }
 
-std::vector<Triangle> Triangulator::triangulate_float(
-    const float* xs,
-    const float* ys,
-    std::size_t point_count) {
-    require_point_count(point_count);
-    if (xs == nullptr || ys == nullptr) {
-        throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    triangulate_float_impl(
-        point_count,
-        [&](std::size_t i) { return xs[i]; },
-        [&](std::size_t i) { return ys[i]; },
-        nullptr,
-        nullptr);
-    return std::move(triangles_out_);
-}
-
-std::vector<Triangle> Triangulator::triangulate_float(
-    const float* xs,
-    const float* ys,
-    std::size_t point_count,
-    QuantizationReport& report) {
-    report = {};
-    require_point_count(point_count);
-    if (xs == nullptr || ys == nullptr) {
-        throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    triangulate_float_impl(
-        point_count,
-        [&](std::size_t i) { return xs[i]; },
-        [&](std::size_t i) { return ys[i]; },
-        &report,
-        nullptr);
-    return std::move(triangles_out_);
-}
-
 TriangulationResult Triangulator::triangulate_int_full(
     const std::vector<Point>& points) {
     require_point_count(points.size());
@@ -476,37 +378,8 @@ TriangulationResult Triangulator::triangulate_int_full(
             static_cast<std::int64_t>(max_x_) - min_x_),
         static_cast<std::uint64_t>(
             static_cast<std::int64_t>(max_y_) - min_y_));
-    triangulate_loaded_points();
-    std::vector<std::uint32_t> representatives = build_representatives(
-        points.size(),
-        [&](std::size_t i) { return points[i].x; },
-        [&](std::size_t i) { return points[i].y; });
-    return make_result(
-        {}, predicate_width, std::move(representatives));
-}
-
-TriangulationResult Triangulator::triangulate_int_full(
-    const std::int32_t* xs,
-    const std::int32_t* ys,
-    std::size_t point_count) {
-    require_point_count(point_count);
-    if (xs == nullptr || ys == nullptr) {
-        throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    load_int_points(
-        point_count,
-        [&](std::size_t i) { return xs[i]; },
-        [&](std::size_t i) { return ys[i]; });
-    const PredicateWidth predicate_width = predicate_width_for_spans(
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_x_) - min_x_),
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(max_y_) - min_y_));
-    triangulate_loaded_points();
-    std::vector<std::uint32_t> representatives = build_representatives(
-        point_count,
-        [&](std::size_t i) { return xs[i]; },
-        [&](std::size_t i) { return ys[i]; });
+    std::vector<std::uint32_t> representatives;
+    triangulate_loaded_points(&representatives);
     return make_result(
         {}, predicate_width, std::move(representatives));
 }
@@ -528,30 +401,15 @@ TriangulationResult Triangulator::triangulate_float_full(
         std::move(representatives));
 }
 
-TriangulationResult Triangulator::triangulate_float_full(
-    const float* xs,
-    const float* ys,
-    std::size_t point_count) {
-    require_point_count(point_count);
-    if (xs == nullptr || ys == nullptr) {
-        throw std::invalid_argument("coordinate arrays must not be null");
-    }
-    QuantizationReport report;
-    std::vector<std::uint32_t> representatives;
-    const PredicateWidth predicate_width = triangulate_float_impl(
-        point_count,
-        [&](std::size_t i) { return xs[i]; },
-        [&](std::size_t i) { return ys[i]; },
-        &report,
-        &representatives);
-    return make_result(
-        report,
-        predicate_width,
-        std::move(representatives));
-}
-
-void Triangulator::triangulate_loaded_points() {
+void Triangulator::triangulate_loaded_points(
+    std::vector<std::uint32_t>* representatives) {
     std::size_t point_count = points_.size();
+    if (representatives != nullptr) {
+        representatives->resize(point_count);
+        for (std::size_t i = 0; i < point_count; ++i) {
+            (*representatives)[i] = static_cast<std::uint32_t>(i);
+        }
+    }
     const std::int64_t x_span = static_cast<std::int64_t>(max_x_) - min_x_;
     const std::int64_t y_span = static_cast<std::int64_t>(max_y_) - min_y_;
     const PredicateWidth predicate_width =
@@ -659,17 +517,25 @@ void Triangulator::triangulate_loaded_points() {
             bool have_coordinate = false;
             std::int32_t previous_x = 0;
             std::int32_t previous_y = 0;
+            std::uint32_t representative = 0;
             const std::uint32_t key = morton_keys_[first];
             for (std::size_t i = first; i < last; ++i) {
                 const Site point = points_[i];
                 if (have_coordinate &&
                     point.x == previous_x &&
                     point.y == previous_y) {
+                    if (representatives != nullptr) {
+                        (*representatives)[point.original] = representative;
+                    }
                     continue;
                 }
                 have_coordinate = true;
                 previous_x = point.x;
                 previous_y = point.y;
+                representative = point.original;
+                if (representatives != nullptr) {
+                    (*representatives)[point.original] = representative;
+                }
                 points_[unique_count] = point;
                 morton_keys_[unique_count] = key;
                 ++unique_count;
@@ -735,7 +601,13 @@ void Triangulator::triangulate_loaded_points() {
             {0, static_cast<std::uint32_t>(edge_count_)});
     }
     outer_seed_ = sym(hull.x.left_outer);
-    if (active_thread_count_ > 1) {
+    if (representatives != nullptr) {
+        if (active_thread_count_ > 1) {
+            export_full_result_parallel(active_thread_count_, *workers);
+        } else {
+            export_full_result();
+        }
+    } else if (active_thread_count_ > 1) {
         export_triangles_parallel(active_thread_count_, *workers);
     } else {
         export_triangles();

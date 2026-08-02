@@ -118,11 +118,6 @@ public:
     // the lowest original input index for each retained site.
     std::vector<Triangle> triangulate_int(
         const std::vector<Point>& points);
-    // Struct-of-arrays overload for callers that already store x/y separately.
-    std::vector<Triangle> triangulate_int(
-        const std::int32_t* xs,
-        const std::int32_t* ys,
-        std::size_t point_count);
     // Uniformly quantizes finite float coordinates into the largest certified
     // integer square domain. The returned indices still reference the original
     // float input; only topology decisions use the quantized coordinates.
@@ -131,31 +126,13 @@ public:
     std::vector<Triangle> triangulate_float(
         const std::vector<FloatPoint>& points,
         QuantizationReport& report);
-    // Struct-of-arrays overload for existing float coordinate buffers.
-    std::vector<Triangle> triangulate_float(
-        const float* xs,
-        const float* ys,
-        std::size_t point_count);
-    std::vector<Triangle> triangulate_float(
-        const float* xs,
-        const float* ys,
-        std::size_t point_count,
-        QuantizationReport& report);
 
     // Opt-in complete results. Existing triangle-only overloads do not
     // construct adjacency, hull, or representative vectors.
     TriangulationResult triangulate_int_full(
         const std::vector<Point>& points);
-    TriangulationResult triangulate_int_full(
-        const std::int32_t* xs,
-        const std::int32_t* ys,
-        std::size_t point_count);
     TriangulationResult triangulate_float_full(
         const std::vector<FloatPoint>& points);
-    TriangulationResult triangulate_float_full(
-        const float* xs,
-        const float* ys,
-        std::size_t point_count);
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
@@ -244,6 +221,8 @@ private:
     std::vector<std::uint32_t> edge_prev_;
     std::vector<EdgeRange> edge_ranges_;
     std::vector<Triangle> triangles_out_;
+    std::vector<std::int64_t> halfedges_out_;
+    std::vector<std::uint32_t> hull_out_;
     std::vector<std::vector<Triangle>> export_scratch_;
     // Retained across calls so multi-shot clients do not rebuild OS threads.
     std::unique_ptr<detail::WorkerTeam> worker_team_;
@@ -273,7 +252,8 @@ private:
         YAt y_at,
         QuantizationReport* report,
         std::vector<std::uint32_t>* representatives);
-    void triangulate_loaded_points();
+    void triangulate_loaded_points(
+        std::vector<std::uint32_t>* representatives = nullptr);
     TriangulationResult make_result(
         const QuantizationReport& quantization,
         PredicateWidth predicate_width,
@@ -348,6 +328,14 @@ private:
     void export_triangles_parallel(
         std::size_t thread_count,
         detail::WorkerTeam& workers);
+    void export_full_result();
+    void export_full_result_parallel(
+        std::size_t thread_count,
+        detail::WorkerTeam& workers);
+    void prepare_full_export();
+    void export_hull();
+    static std::size_t checked_flat_edge_count(
+        std::size_t triangle_count);
     bool find_export_face(
         std::uint32_t start,
         std::uint32_t& second,

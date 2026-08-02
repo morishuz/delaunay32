@@ -293,27 +293,6 @@ void test_deterministic_cases() {
     }
 }
 
-void test_struct_of_arrays_api() {
-    const std::vector<Point> points =
-        benchmark_support::generate_points(
-            Dataset::Uniform, 4096, 0xa11ceULL, 20000);
-    std::vector<std::int32_t> xs(points.size());
-    std::vector<std::int32_t> ys(points.size());
-    for (std::size_t i = 0; i < points.size(); ++i) {
-        xs[i] = points[i].x;
-        ys[i] = points[i].y;
-    }
-
-    Triangulator triangulator;
-    const std::vector<Triangle> vector_mesh =
-        triangulator.triangulate_int(points);
-    const std::vector<Triangle> array_mesh =
-        triangulator.triangulate_int(xs.data(), ys.data(), points.size());
-    require(
-        benchmark_support::meshes_equal(vector_mesh, array_mesh),
-        "vector and struct-of-arrays APIs differ");
-}
-
 void test_rich_integer_result() {
     const std::vector<Point> points = {
         {0, 0},
@@ -353,21 +332,6 @@ void test_rich_integer_result() {
         benchmark_support::meshes_equal(
             result.triangles, triangle_only),
         "rich and triangle-only integer APIs differ");
-
-    std::vector<std::int32_t> xs;
-    std::vector<std::int32_t> ys;
-    for (const Point& point : points) {
-        xs.push_back(point.x);
-        ys.push_back(point.y);
-    }
-    const TriangulationResult array_result =
-        triangulator.triangulate_int_full(
-            xs.data(), ys.data(), xs.size());
-    require(
-        benchmark_support::meshes_equal(
-            result.triangles, array_result.triangles) &&
-            array_result.representatives == expected_representatives,
-        "rich integer struct-of-arrays overload differs");
 
     const std::vector<Point> collinear = {
         {3, 7}, {-4, 7}, {9, 7}, {0, 7},
@@ -425,38 +389,11 @@ void test_float_api() {
         benchmark_support::meshes_equal(vector_mesh, integer_mesh),
         "float API differs from its reported integer quantization");
 
-    std::vector<float> xs;
-    std::vector<float> ys;
-    xs.reserve(points.size());
-    ys.reserve(points.size());
-    for (const FloatPoint& point : points) {
-        xs.push_back(point.x);
-        ys.push_back(point.y);
-    }
-    QuantizationReport array_report;
-    const std::vector<Triangle> array_mesh = triangulator.triangulate_float(
-        xs.data(), ys.data(), xs.size(), array_report);
-    require(
-        benchmark_support::meshes_equal(vector_mesh, array_mesh),
-        "float vector and struct-of-arrays APIs differ");
-    require(
-        report.origin_x == array_report.origin_x &&
-            report.origin_y == array_report.origin_y &&
-            report.scale == array_report.scale &&
-            report.unique_points == array_report.unique_points,
-        "float overloads reported different quantization");
-
     const std::vector<Triangle> no_report_mesh =
         triangulator.triangulate_float(points);
     require(
         benchmark_support::meshes_equal(vector_mesh, no_report_mesh),
         "vector float report overload changed the mesh");
-    const std::vector<Triangle> array_no_report_mesh =
-        triangulator.triangulate_float(
-            xs.data(), ys.data(), xs.size());
-    require(
-        benchmark_support::meshes_equal(vector_mesh, array_no_report_mesh),
-        "array float report overload changed the mesh");
 }
 
 void test_float_quantization_collisions() {
@@ -535,22 +472,6 @@ void test_rich_float_result() {
             report.max_coordinate_error ==
                 result.quantization.max_coordinate_error,
         "rich and triangle-only float quantization reports differ");
-
-    std::vector<float> xs;
-    std::vector<float> ys;
-    for (const FloatPoint& point : points) {
-        xs.push_back(point.x);
-        ys.push_back(point.y);
-    }
-    const TriangulationResult array_result =
-        triangulator.triangulate_float_full(
-            xs.data(), ys.data(), xs.size());
-    require(
-        benchmark_support::meshes_equal(
-            result.triangles, array_result.triangles) &&
-            array_result.representatives == expected_representatives &&
-            array_result.quantization.scale == result.quantization.scale,
-        "rich float struct-of-arrays overload differs");
 }
 
 void test_float_parallel() {
@@ -650,20 +571,6 @@ void test_duplicates() {
     require(
         benchmark_support::meshes_equal(expected, candidate),
         "duplicate compaction changed the triangle set or representatives");
-
-    std::vector<std::int32_t> xs;
-    std::vector<std::int32_t> ys;
-    xs.reserve(duplicated.size());
-    ys.reserve(duplicated.size());
-    for (const Point& point : duplicated) {
-        xs.push_back(point.x);
-        ys.push_back(point.y);
-    }
-    const std::vector<Triangle> array_candidate =
-        triangulator.triangulate_int(xs.data(), ys.data(), xs.size());
-    require(
-        benchmark_support::meshes_equal(expected, array_candidate),
-        "struct-of-arrays duplicate compaction differs");
 }
 
 void test_collinear_input() {
@@ -753,30 +660,10 @@ void test_invalid_inputs() {
         "fewer than three unique points");
     require_invalid(
         [&] {
-            triangulator.triangulate_int(nullptr, nullptr, 3);
-        },
-        "null coordinate arrays");
-    require_invalid(
-        [&] {
-            triangulator.triangulate_int_full(nullptr, nullptr, 3);
-        },
-        "null rich integer coordinate arrays");
-    require_invalid(
-        [&] {
             triangulator.triangulate_float(
                 std::vector<FloatPoint>{{0.0F, 0.0F}, {1.0F, 1.0F}});
         },
         "fewer than three float points");
-    require_invalid(
-        [&] {
-            triangulator.triangulate_float(nullptr, nullptr, 3);
-        },
-        "null float coordinate arrays");
-    require_invalid(
-        [&] {
-            triangulator.triangulate_float_full(nullptr, nullptr, 3);
-        },
-        "null rich float coordinate arrays");
     require_invalid(
         [&] {
             triangulator.triangulate_float(std::vector<FloatPoint>{
@@ -835,7 +722,6 @@ int main() {
     try {
         delaunay32::test_predicate_selection();
         delaunay32::test_deterministic_cases();
-        delaunay32::test_struct_of_arrays_api();
         delaunay32::test_rich_integer_result();
         delaunay32::test_float_api();
         delaunay32::test_float_quantization_collisions();

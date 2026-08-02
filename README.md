@@ -26,7 +26,6 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Triangle indices referencing the original input, counterclockwise on the
   triangulation grid
 - Opt-in halfedge adjacency, convex hull, and duplicate representative mapping
-- Efficient struct-of-arrays API for existing integer buffers
 - Uniform float quantization with an optional precision and collision report
 - MIT licensed and dependency-free for normal library use
 
@@ -196,9 +195,6 @@ int main() {
 }
 ```
 
-For existing struct-of-arrays storage, `triangulate_int(xs, ys, count)` avoids
-constructing a temporary `Point` vector.
-
 ### Float input
 
 Pass finite float coordinates directly as `FloatPoint` values. No manual
@@ -226,10 +222,7 @@ for (const auto& triangle : triangles) {
 }
 ```
 
-The equivalent struct-of-arrays overload is
-`triangulate_float(xs, ys, count, report)`. Both input layouts also have an
-overload without a report argument when the quantization details are not
-needed.
+Use `triangulate_float(points)` when the quantization details are not needed.
 
 The returned vertices retain their original precision. The connectivity is
 computed on the internal integer grid, so edge choices can differ from an exact

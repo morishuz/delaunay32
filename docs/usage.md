@@ -31,13 +31,10 @@ representative mappings, and operation metadata.
 | Input layout | Coordinates | Call |
 |:--|:--|:--|
 | `std::vector<Point>` | signed 32-bit integers | `triangulate_int(points)` |
-| separate arrays | signed 32-bit integers | `triangulate_int(xs, ys, count)` |
 | `std::vector<FloatPoint>` | 32-bit floats | `triangulate_float(points)` |
 | `std::vector<FloatPoint>` with mapping report | 32-bit floats | `triangulate_float(points, report)` |
-| separate arrays | 32-bit floats | `triangulate_float(xs, ys, count)` |
-| separate arrays with mapping report | 32-bit floats | `triangulate_float(xs, ys, count, report)` |
-| vector or separate arrays with full output | integers | `triangulate_int_full(...)` |
-| vector or separate arrays with full output | floats | `triangulate_float_full(...)` |
+| `std::vector<Point>` with full output | integers | `triangulate_int_full(points)` |
+| `std::vector<FloatPoint>` with full output | floats | `triangulate_float_full(points)` |
 
 Use integer input when the coordinates are already discrete or when exact
 Delaunay decisions on a chosen integer grid are required. Direct float input is
@@ -231,22 +228,6 @@ const std::vector<delaunay32::Triangle> triangles =
 
 The vector is passed by const reference and is not modified.
 
-### Separate coordinate arrays
-
-Use the structure-of-arrays overload when x and y coordinates are already held
-in separate contiguous buffers:
-
-```cpp
-std::vector<std::int32_t> xs = {0, 100, 100, 0, 48};
-std::vector<std::int32_t> ys = {0, 0, 100, 100, 37};
-
-const auto triangles = triangulator.triangulate_int(
-    xs.data(), ys.data(), xs.size());
-```
-
-Both pointers must be non-null and address at least `point_count` values. The
-two integer overloads have identical geometric behavior.
-
 ### Exactness and supported spans
 
 Orientation and in-circle decisions are exact for every accepted integer input.
@@ -319,22 +300,6 @@ if (report.collapsed_points != 0) {
 }
 ```
 
-### Separate coordinate arrays
-
-The structure-of-arrays forms accept existing float buffers, with or without a
-report:
-
-```cpp
-const auto triangles = triangulator.triangulate_float(
-    xs.data(), ys.data(), xs.size());
-
-delaunay32::QuantizationReport report;
-const auto measured_triangles = triangulator.triangulate_float(
-    xs.data(), ys.data(), xs.size(), report);
-```
-
-Both pointers must be non-null and address at least `point_count` values.
-
 ### How automatic quantization works
 
 Finite floats across the full float range are accepted. The library translates
@@ -397,7 +362,6 @@ The triangulation functions throw `std::invalid_argument` when:
 
 - fewer than three input points are supplied;
 - fewer than three unique integer or quantized coordinates remain;
-- a structure-of-arrays pointer is null;
 - a float coordinate is NaN or infinite;
 - integer coordinate spans exceed the certified predicate range;
 - the input count exceeds the internal index or edge-arena range.
