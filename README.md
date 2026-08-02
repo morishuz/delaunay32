@@ -145,6 +145,25 @@ Install with:
 cmake --install build
 ```
 
+### Windows with MSVC
+
+Install Visual Studio with the **Desktop development with C++** workload, plus
+Git and CMake. From PowerShell, use the multi-configuration Visual Studio
+generator as follows:
+
+```powershell
+git submodule update --init --recursive
+cmake -S . -B build
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+cmake --install build --config Release
+```
+
+Unlike single-configuration Linux and macOS builds, Visual Studio selects the
+configuration when building, testing, and installing. Built executables are
+therefore under `build\Release\`, for example
+`build\Release\delaunay_benchmark.exe`.
+
 The exported CMake target is `delaunay32::delaunay32`.
 
 ## Usage
