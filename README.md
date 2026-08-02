@@ -1,6 +1,6 @@
 # Delaunay32
 
-**Fast, exact, parallel 2D Delaunay triangulation for signed 32-bit integer coordinates, with convenient float quantization.**
+**Fast, parallel 2D Delaunay triangulation using exact integer predicates, with direct float input.**
 
 `Delaunay32` is a C++17 library for triangulating large sets of discrete 2D
 points: pixels, raster samples, voxel projections, fixed-point geometry, and
