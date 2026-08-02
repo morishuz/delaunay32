@@ -40,6 +40,7 @@ set(DELAUNAY32_LIBRARY_SOURCES
     src/delaunay.cpp
     src/export.cpp
     src/internal.hpp
+    src/result.cpp
     src/topology.cpp
     src/worker_team.cpp
 )

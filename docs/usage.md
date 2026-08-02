@@ -6,7 +6,7 @@ different guarantees for integer and floating-point input.
 
 ## Core model
 
-Every triangulation call returns a `std::vector<delaunay32::Triangle>`. A
+The basic triangulation calls return a `std::vector<delaunay32::Triangle>`. A
 `Triangle` contains three indices into the caller's original input:
 
 ```cpp
@@ -22,6 +22,10 @@ important for float input: the library quantizes coordinates internally to
 choose the connectivity, but the indices still address the unchanged source
 floats.
 
+The opt-in `triangulate_int_full()` and `triangulate_float_full()` calls return
+the same faces plus halfedge adjacency, convex-hull indices, input
+representative mappings, and operation metadata.
+
 ## Choosing an input API
 
 | Input layout | Coordinates | Call |
@@ -32,6 +36,8 @@ floats.
 | `std::vector<FloatPoint>` with mapping report | 32-bit floats | `triangulate_float(points, report)` |
 | separate arrays | 32-bit floats | `triangulate_float(xs, ys, count)` |
 | separate arrays with mapping report | 32-bit floats | `triangulate_float(xs, ys, count, report)` |
+| vector or separate arrays with full output | integers | `triangulate_int_full(...)` |
+| vector or separate arrays with full output | floats | `triangulate_float_full(...)` |
 
 Use integer input when the coordinates are already discrete or when exact
 Delaunay decisions on a chosen integer grid are required. Direct float input is
@@ -133,6 +139,48 @@ Inspect its fields only after a successful triangulation call:
 | `max_coordinate_error` | Largest measured absolute reconstruction error in either coordinate. |
 | `unique_points` | Number of distinct grid coordinates triangulated. |
 | `collapsed_points` | Input count minus `unique_points`, including exact duplicates and quantization collisions. |
+
+### `TriangulationResult`
+
+The full-result API is opt-in, so existing triangle-only calls do not construct
+the additional vectors:
+
+```cpp
+const delaunay32::TriangulationResult result =
+    triangulator.triangulate_int_full(points);
+```
+
+`TriangulationResult` contains:
+
+| Field | Meaning |
+|:--|:--|
+| `triangles` | The same faces returned by the corresponding triangle-only call. |
+| `halfedges` | One flattened opposite-edge index per triangle edge, or `-1` for a boundary edge. |
+| `hull` | Original input indices around the convex hull. |
+| `representatives` | One retained representative index for every original input index. |
+| `quantization` | The float quantization report; zero-initialized for integer input. |
+| `predicate_width` | Exact predicate path selected for the completed operation. |
+| `actual_thread_count` | Threads actually used after size thresholds and any serial recovery. |
+
+For triangle `t`, flattened edges `3*t`, `3*t+1`, and `3*t+2` correspond to
+`i0->i1`, `i1->i2`, and `i2->i0`. If `result.halfedges[e]` is nonnegative, its
+value identifies the same geometric edge in the neighboring triangle with the
+opposite direction. Halfedge indices are signed 64-bit values so `-1` remains
+an unambiguous boundary sentinel.
+
+For a nondegenerate mesh, `hull` is counterclockwise in the coordinates used
+for triangulation and is rotated to start at its lowest original input index.
+A collinear result has no triangles or halfedges and contains its two geometric
+endpoints in `hull`.
+
+Every `representatives[i]` is the lowest input index at the same integer or
+quantized coordinate as input `i`. Unique points map to themselves. This makes
+duplicate removal and float quantization collisions explicit without changing
+the indices stored in `triangles` or `hull`.
+
+The full calls populate every field. Use the corresponding triangle-only call
+when adjacency, hull, representative mappings, and operation metadata are not
+needed.
 
 ### `PredicateWidth`
 

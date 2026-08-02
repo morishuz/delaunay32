@@ -15,6 +15,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -69,6 +70,87 @@ void require_reference_match(
         benchmark_support::validate_against_reference(
             points, candidate, reference, error),
         std::string(label) + ": " + error);
+}
+
+std::uint32_t triangle_vertex(
+    const Triangle& triangle,
+    std::size_t local_index) {
+    switch (local_index) {
+        case 0:
+            return triangle.i0;
+        case 1:
+            return triangle.i1;
+        default:
+            return triangle.i2;
+    }
+}
+
+void require_rich_topology(
+    const std::vector<Point>& points,
+    const TriangulationResult& result,
+    const std::string& label) {
+    const std::size_t edge_count = result.triangles.size() * 3;
+    require(
+        result.halfedges.size() == edge_count,
+        label + ": halfedge count does not match triangles");
+
+    std::unordered_map<std::uint32_t, std::uint32_t> boundary;
+    for (std::size_t edge = 0; edge < edge_count; ++edge) {
+        const Triangle& triangle = result.triangles[edge / 3];
+        const std::size_t local = edge % 3;
+        const std::uint32_t a = triangle_vertex(triangle, local);
+        const std::uint32_t b =
+            triangle_vertex(triangle, (local + 1) % 3);
+        const std::int64_t opposite = result.halfedges[edge];
+        if (opposite == -1) {
+            require(
+                boundary.emplace(a, b).second,
+                label + ": boundary branches at a hull vertex");
+            continue;
+        }
+        require(
+            opposite >= 0 &&
+                static_cast<std::uint64_t>(opposite) < edge_count,
+            label + ": halfedge points outside the flattened edge array");
+        const std::size_t opposite_edge =
+            static_cast<std::size_t>(opposite);
+        require(
+            result.halfedges[opposite_edge] ==
+                static_cast<std::int64_t>(edge),
+            label + ": halfedge pairing is not reciprocal");
+        const Triangle& neighbor = result.triangles[opposite_edge / 3];
+        const std::size_t neighbor_local = opposite_edge % 3;
+        require(
+            a == triangle_vertex(
+                     neighbor, (neighbor_local + 1) % 3) &&
+                b == triangle_vertex(neighbor, neighbor_local),
+            label + ": paired halfedges do not reverse endpoints");
+    }
+
+    require(
+        result.hull.size() == boundary.size(),
+        label + ": hull length differs from boundary edge count");
+    require(!result.hull.empty(), label + ": nonempty mesh has no hull");
+    require(
+        result.hull.front() ==
+            *std::min_element(result.hull.begin(), result.hull.end()),
+        label + ": hull is not rotated to its lowest input index");
+    long double twice_area = 0.0L;
+    for (std::size_t i = 0; i < result.hull.size(); ++i) {
+        const std::uint32_t a = result.hull[i];
+        const std::uint32_t b = result.hull[(i + 1) % result.hull.size()];
+        require(
+            a < points.size() && b < points.size(),
+            label + ": hull index is outside the input");
+        const auto iterator = boundary.find(a);
+        require(
+            iterator != boundary.end() && iterator->second == b,
+            label + ": hull order does not follow boundary halfedges");
+        twice_area +=
+            static_cast<long double>(points[a].x) * points[b].y -
+            static_cast<long double>(points[a].y) * points[b].x;
+    }
+    require(twice_area > 0.0L, label + ": hull is not counterclockwise");
 }
 
 std::vector<Point> quantize_from_report(
@@ -232,6 +314,75 @@ void test_struct_of_arrays_api() {
         "vector and struct-of-arrays APIs differ");
 }
 
+void test_rich_integer_result() {
+    const std::vector<Point> points = {
+        {0, 0},
+        {10, 0},
+        {0, 0},
+        {10, 10},
+        {0, 10},
+        {5, 5},
+        {5, 5},
+    };
+    const std::vector<std::uint32_t> expected_representatives = {
+        0, 1, 0, 3, 4, 5, 5,
+    };
+
+    Triangulator triangulator(4);
+    const TriangulationResult result =
+        triangulator.triangulate_int_full(points);
+    require(!result.triangles.empty(), "rich integer result is empty");
+    require(
+        result.representatives == expected_representatives,
+        "rich integer representative mapping is incorrect");
+    require(
+        result.predicate_width == PredicateWidth::Int64,
+        "rich integer result reported the wrong predicate width");
+    require(
+        result.actual_thread_count == 1,
+        "small rich integer result did not report serial execution");
+    require(
+        result.quantization.scale == 0.0 &&
+            result.quantization.unique_points == 0,
+        "integer result unexpectedly contains quantization metadata");
+    require_rich_topology(points, result, "rich integer result");
+
+    const std::vector<Triangle> triangle_only =
+        triangulator.triangulate_int(points);
+    require(
+        benchmark_support::meshes_equal(
+            result.triangles, triangle_only),
+        "rich and triangle-only integer APIs differ");
+
+    std::vector<std::int32_t> xs;
+    std::vector<std::int32_t> ys;
+    for (const Point& point : points) {
+        xs.push_back(point.x);
+        ys.push_back(point.y);
+    }
+    const TriangulationResult array_result =
+        triangulator.triangulate_int_full(
+            xs.data(), ys.data(), xs.size());
+    require(
+        benchmark_support::meshes_equal(
+            result.triangles, array_result.triangles) &&
+            array_result.representatives == expected_representatives,
+        "rich integer struct-of-arrays overload differs");
+
+    const std::vector<Point> collinear = {
+        {3, 7}, {-4, 7}, {9, 7}, {0, 7},
+    };
+    const TriangulationResult collinear_result =
+        triangulator.triangulate_int_full(collinear);
+    require(
+        collinear_result.triangles.empty() &&
+            collinear_result.halfedges.empty(),
+        "collinear rich result contains faces or halfedges");
+    require(
+        collinear_result.hull == std::vector<std::uint32_t>({1, 2}),
+        "collinear rich result does not contain its endpoints");
+}
+
 void test_float_api() {
     const std::vector<FloatPoint> points = {
         {0.125F, 0.25F},
@@ -341,6 +492,67 @@ void test_float_quantization_collisions() {
         "full-range float mesh differs from integer quantization");
 }
 
+void test_rich_float_result() {
+    const float maximum = std::numeric_limits<float>::max();
+    const std::vector<FloatPoint> points = {
+        {-maximum, -maximum},
+        {maximum, -maximum},
+        {maximum, maximum},
+        {-maximum, maximum},
+        {0.0F, 0.0F},
+        {1.0F, 1.0F},
+    };
+    const std::vector<std::uint32_t> expected_representatives = {
+        0, 1, 2, 3, 4, 4,
+    };
+
+    Triangulator triangulator;
+    const TriangulationResult result =
+        triangulator.triangulate_float_full(points);
+    require(
+        result.quantization.unique_points == 5 &&
+            result.quantization.collapsed_points == 1,
+        "rich float result has incorrect quantization counts");
+    require(
+        result.representatives == expected_representatives,
+        "rich float representative mapping is incorrect");
+    require(
+        result.predicate_width != PredicateWidth::Unsupported,
+        "rich float result reported unsupported predicates");
+    const std::vector<Point> quantized =
+        quantize_from_report(points, result.quantization);
+    require_rich_topology(quantized, result, "rich float result");
+
+    QuantizationReport report;
+    const std::vector<Triangle> triangle_only =
+        triangulator.triangulate_float(points, report);
+    require(
+        benchmark_support::meshes_equal(
+            result.triangles, triangle_only),
+        "rich and triangle-only float APIs differ");
+    require(
+        report.scale == result.quantization.scale &&
+            report.max_coordinate_error ==
+                result.quantization.max_coordinate_error,
+        "rich and triangle-only float quantization reports differ");
+
+    std::vector<float> xs;
+    std::vector<float> ys;
+    for (const FloatPoint& point : points) {
+        xs.push_back(point.x);
+        ys.push_back(point.y);
+    }
+    const TriangulationResult array_result =
+        triangulator.triangulate_float_full(
+            xs.data(), ys.data(), xs.size());
+    require(
+        benchmark_support::meshes_equal(
+            result.triangles, array_result.triangles) &&
+            array_result.representatives == expected_representatives &&
+            array_result.quantization.scale == result.quantization.scale,
+        "rich float struct-of-arrays overload differs");
+}
+
 void test_float_parallel() {
     const std::vector<Point> integer_points =
         benchmark_support::generate_points(
@@ -368,6 +580,27 @@ void test_float_parallel() {
     require(
         benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
         "serial and parallel float triangle sets differ");
+
+    const TriangulationResult rich =
+        parallel.triangulate_float_full(points);
+    require(
+        benchmark_support::meshes_equal(serial_mesh, rich.triangles),
+        "parallel rich float triangle set differs");
+    require(
+        rich.actual_thread_count == 2,
+        "parallel rich result reported the wrong actual thread count");
+    require(
+        rich.representatives.size() == points.size(),
+        "parallel rich result omitted representative entries");
+    for (std::size_t i = 0; i < rich.representatives.size(); ++i) {
+        require(
+            rich.representatives[i] == i,
+            "parallel rich result changed a unique representative");
+    }
+    require_rich_topology(
+        quantize_from_report(points, rich.quantization),
+        rich,
+        "parallel rich float result");
 }
 
 void test_float_collinear_input() {
@@ -525,6 +758,11 @@ void test_invalid_inputs() {
         "null coordinate arrays");
     require_invalid(
         [&] {
+            triangulator.triangulate_int_full(nullptr, nullptr, 3);
+        },
+        "null rich integer coordinate arrays");
+    require_invalid(
+        [&] {
             triangulator.triangulate_float(
                 std::vector<FloatPoint>{{0.0F, 0.0F}, {1.0F, 1.0F}});
         },
@@ -534,6 +772,11 @@ void test_invalid_inputs() {
             triangulator.triangulate_float(nullptr, nullptr, 3);
         },
         "null float coordinate arrays");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float_full(nullptr, nullptr, 3);
+        },
+        "null rich float coordinate arrays");
     require_invalid(
         [&] {
             triangulator.triangulate_float(std::vector<FloatPoint>{
@@ -593,8 +836,10 @@ int main() {
         delaunay32::test_predicate_selection();
         delaunay32::test_deterministic_cases();
         delaunay32::test_struct_of_arrays_api();
+        delaunay32::test_rich_integer_result();
         delaunay32::test_float_api();
         delaunay32::test_float_quantization_collisions();
+        delaunay32::test_rich_float_result();
         delaunay32::test_float_parallel();
         delaunay32::test_float_collinear_input();
         delaunay32::test_duplicates();
@@ -603,7 +848,8 @@ int main() {
         delaunay32::test_invalid_inputs();
         std::cout
             << "validation passed: deterministic, duplicate, collinear, "
-               "integer/float API, predicate-width, and parallel cases\n";
+               "integer/float/rich API, predicate-width, and parallel "
+               "cases\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "validation failed: " << error.what() << '\n';

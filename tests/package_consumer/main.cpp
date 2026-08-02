@@ -16,6 +16,14 @@ int main() {
     if (triangulator.triangulate_int(integer_points).size() != 4) {
         return 1;
     }
+    const delaunay32::TriangulationResult integer_result =
+        triangulator.triangulate_int_full(integer_points);
+    if (integer_result.triangles.size() != 4 ||
+        integer_result.halfedges.size() != 12 ||
+        integer_result.hull.size() != 4 ||
+        integer_result.representatives.size() != integer_points.size()) {
+        return 2;
+    }
 
     const std::vector<delaunay32::FloatPoint> float_points = {
         {0.0F, 0.0F},
@@ -28,7 +36,14 @@ int main() {
     if (triangulator.triangulate_float(float_points, report).size() != 4 ||
         report.unique_points != float_points.size() ||
         report.collapsed_points != 0) {
-        return 2;
+        return 3;
+    }
+    const delaunay32::TriangulationResult float_result =
+        triangulator.triangulate_float_full(float_points);
+    if (float_result.triangles.size() != 4 ||
+        float_result.quantization.unique_points != float_points.size() ||
+        float_result.quantization.collapsed_points != 0) {
+        return 4;
     }
     return 0;
 }

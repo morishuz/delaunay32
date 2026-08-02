@@ -9,6 +9,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -119,6 +120,32 @@ void initialize_quantization_report(
     report->scale = quantizer.scale;
     report->grid_step =
         quantizer.scale == 0.0 ? 0.0 : 1.0 / quantizer.scale;
+}
+
+std::uint64_t coordinate_key(
+    std::int32_t x,
+    std::int32_t y) {
+    return (static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(x))
+            << 32U) |
+           static_cast<std::uint32_t>(y);
+}
+
+template <typename XAt, typename YAt>
+std::vector<std::uint32_t> build_representatives(
+    std::size_t point_count,
+    XAt x_at,
+    YAt y_at) {
+    std::vector<std::uint32_t> representatives(point_count);
+    std::unordered_map<std::uint64_t, std::uint32_t> first_at_coordinate;
+    first_at_coordinate.reserve(point_count);
+    for (std::size_t i = 0; i < point_count; ++i) {
+        const std::uint32_t original = static_cast<std::uint32_t>(i);
+        const auto [iterator, inserted] = first_at_coordinate.emplace(
+            coordinate_key(x_at(i), y_at(i)), original);
+        representatives[i] = inserted ? original : iterator->second;
+    }
+    return representatives;
 }
 
 // Shared predicate-span checks for Int64 vs Int128 certification.
@@ -241,6 +268,31 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 #endif
 }
 
+template <typename XAt, typename YAt>
+void Triangulator::load_int_points(
+    std::size_t point_count,
+    XAt x_at,
+    YAt y_at) {
+    points_.resize(point_count);
+    min_x_ = max_x_ = x_at(0);
+    min_y_ = max_y_ = y_at(0);
+    points_[0] = {min_x_, min_y_, 0, 0};
+    for (std::size_t i = 1; i < point_count; ++i) {
+        const std::int32_t x = x_at(i);
+        const std::int32_t y = y_at(i);
+        min_x_ = std::min(min_x_, x);
+        max_x_ = std::max(max_x_, x);
+        min_y_ = std::min(min_y_, y);
+        max_y_ = std::max(max_y_, y);
+        points_[i] = {
+            x,
+            y,
+            static_cast<std::uint32_t>(i),
+            0,
+        };
+    }
+}
+
 std::vector<Triangle> Triangulator::triangulate_int(
     const std::vector<Point>& points) {
     require_point_count(points.size());
@@ -288,17 +340,23 @@ std::vector<Triangle> Triangulator::triangulate_int(
 }
 
 template <typename XAt, typename YAt>
-std::vector<Triangle> Triangulator::triangulate_float_impl(
+PredicateWidth Triangulator::triangulate_float_impl(
     std::size_t point_count,
     XAt x_at,
     YAt y_at,
-    QuantizationReport* report) {
+    QuantizationReport* report,
+    std::vector<std::uint32_t>* representatives) {
     const FloatBounds bounds = find_float_bounds(
         point_count, x_at, y_at);
     const FloatQuantizer quantizer = make_float_quantizer(bounds);
     initialize_quantization_report(report, quantizer);
 
     points_.resize(point_count);
+    std::unordered_map<std::uint64_t, std::uint32_t> first_at_coordinate;
+    if (representatives != nullptr) {
+        representatives->resize(point_count);
+        first_at_coordinate.reserve(point_count);
+    }
     for (std::size_t i = 0; i < point_count; ++i) {
         const double input_x = x_at(i);
         const double input_y = y_at(i);
@@ -316,6 +374,13 @@ std::vector<Triangle> Triangulator::triangulate_float_impl(
             max_y_ = std::max(max_y_, y);
         }
         points_[i] = {x, y, static_cast<std::uint32_t>(i), 0};
+        if (representatives != nullptr) {
+            const std::uint32_t original = static_cast<std::uint32_t>(i);
+            const auto [iterator, inserted] = first_at_coordinate.emplace(
+                coordinate_key(x, y), original);
+            (*representatives)[i] =
+                inserted ? original : iterator->second;
+        }
         if (report != nullptr) {
             report->max_coordinate_error = std::max({
                 report->max_coordinate_error,
@@ -324,22 +389,29 @@ std::vector<Triangle> Triangulator::triangulate_float_impl(
             });
         }
     }
+    const PredicateWidth predicate_width = predicate_width_for_spans(
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_x_) - min_x_),
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_y_) - min_y_));
     triangulate_loaded_points();
     if (report != nullptr) {
         report->unique_points = points_.size();
         report->collapsed_points = point_count - points_.size();
     }
-    return std::move(triangles_out_);
+    return predicate_width;
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
     const std::vector<FloatPoint>& points) {
     require_point_count(points.size());
-    return triangulate_float_impl(
+    triangulate_float_impl(
         points.size(),
         [&](std::size_t i) { return points[i].x; },
         [&](std::size_t i) { return points[i].y; },
+        nullptr,
         nullptr);
+    return std::move(triangles_out_);
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
@@ -347,11 +419,13 @@ std::vector<Triangle> Triangulator::triangulate_float(
     QuantizationReport& report) {
     report = {};
     require_point_count(points.size());
-    return triangulate_float_impl(
+    triangulate_float_impl(
         points.size(),
         [&](std::size_t i) { return points[i].x; },
         [&](std::size_t i) { return points[i].y; },
-        &report);
+        &report,
+        nullptr);
+    return std::move(triangles_out_);
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
@@ -362,11 +436,13 @@ std::vector<Triangle> Triangulator::triangulate_float(
     if (xs == nullptr || ys == nullptr) {
         throw std::invalid_argument("coordinate arrays must not be null");
     }
-    return triangulate_float_impl(
+    triangulate_float_impl(
         point_count,
         [&](std::size_t i) { return xs[i]; },
         [&](std::size_t i) { return ys[i]; },
+        nullptr,
         nullptr);
+    return std::move(triangles_out_);
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
@@ -379,11 +455,99 @@ std::vector<Triangle> Triangulator::triangulate_float(
     if (xs == nullptr || ys == nullptr) {
         throw std::invalid_argument("coordinate arrays must not be null");
     }
-    return triangulate_float_impl(
+    triangulate_float_impl(
         point_count,
         [&](std::size_t i) { return xs[i]; },
         [&](std::size_t i) { return ys[i]; },
-        &report);
+        &report,
+        nullptr);
+    return std::move(triangles_out_);
+}
+
+TriangulationResult Triangulator::triangulate_int_full(
+    const std::vector<Point>& points) {
+    require_point_count(points.size());
+    load_int_points(
+        points.size(),
+        [&](std::size_t i) { return points[i].x; },
+        [&](std::size_t i) { return points[i].y; });
+    const PredicateWidth predicate_width = predicate_width_for_spans(
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_x_) - min_x_),
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_y_) - min_y_));
+    triangulate_loaded_points();
+    std::vector<std::uint32_t> representatives = build_representatives(
+        points.size(),
+        [&](std::size_t i) { return points[i].x; },
+        [&](std::size_t i) { return points[i].y; });
+    return make_result(
+        {}, predicate_width, std::move(representatives));
+}
+
+TriangulationResult Triangulator::triangulate_int_full(
+    const std::int32_t* xs,
+    const std::int32_t* ys,
+    std::size_t point_count) {
+    require_point_count(point_count);
+    if (xs == nullptr || ys == nullptr) {
+        throw std::invalid_argument("coordinate arrays must not be null");
+    }
+    load_int_points(
+        point_count,
+        [&](std::size_t i) { return xs[i]; },
+        [&](std::size_t i) { return ys[i]; });
+    const PredicateWidth predicate_width = predicate_width_for_spans(
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_x_) - min_x_),
+        static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(max_y_) - min_y_));
+    triangulate_loaded_points();
+    std::vector<std::uint32_t> representatives = build_representatives(
+        point_count,
+        [&](std::size_t i) { return xs[i]; },
+        [&](std::size_t i) { return ys[i]; });
+    return make_result(
+        {}, predicate_width, std::move(representatives));
+}
+
+TriangulationResult Triangulator::triangulate_float_full(
+    const std::vector<FloatPoint>& points) {
+    require_point_count(points.size());
+    QuantizationReport report;
+    std::vector<std::uint32_t> representatives;
+    const PredicateWidth predicate_width = triangulate_float_impl(
+        points.size(),
+        [&](std::size_t i) { return points[i].x; },
+        [&](std::size_t i) { return points[i].y; },
+        &report,
+        &representatives);
+    return make_result(
+        report,
+        predicate_width,
+        std::move(representatives));
+}
+
+TriangulationResult Triangulator::triangulate_float_full(
+    const float* xs,
+    const float* ys,
+    std::size_t point_count) {
+    require_point_count(point_count);
+    if (xs == nullptr || ys == nullptr) {
+        throw std::invalid_argument("coordinate arrays must not be null");
+    }
+    QuantizationReport report;
+    std::vector<std::uint32_t> representatives;
+    const PredicateWidth predicate_width = triangulate_float_impl(
+        point_count,
+        [&](std::size_t i) { return xs[i]; },
+        [&](std::size_t i) { return ys[i]; },
+        &report,
+        &representatives);
+    return make_result(
+        report,
+        predicate_width,
+        std::move(representatives));
 }
 
 void Triangulator::triangulate_loaded_points() {

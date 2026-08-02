@@ -400,7 +400,19 @@ void test_independent_concurrent_instances() {
         callers.emplace_back([&, i] {
             try {
                 Triangulator triangulator(thread_counts[i]);
-                outputs[i] = triangulator.triangulate_int(points);
+                if (i + 1 == thread_counts.size()) {
+                    TriangulationResult result =
+                        triangulator.triangulate_int_full(points);
+                    require(
+                        result.halfedges.size() ==
+                                result.triangles.size() * 3 &&
+                            !result.hull.empty() &&
+                            result.representatives.size() == points.size(),
+                        "concurrent rich result omitted auxiliary data");
+                    outputs[i] = std::move(result.triangles);
+                } else {
+                    outputs[i] = triangulator.triangulate_int(points);
+                }
             } catch (...) {
                 exceptions[i] = std::current_exception();
             }

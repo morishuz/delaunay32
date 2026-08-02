@@ -55,6 +55,29 @@ struct QuantizationReport {
     std::size_t collapsed_points = 0;
 };
 
+struct TriangulationResult {
+    // The same triangle vector returned by the corresponding triangle-only
+    // API. For each flattened edge e = 3 * triangle + local_edge,
+    // halfedges[e] is the oppositely directed neighboring edge, or -1 on the
+    // convex hull. Local edges are i0->i1, i1->i2, and i2->i0.
+    std::vector<Triangle> triangles;
+    std::vector<std::int64_t> halfedges;
+
+    // Original input indices around the convex hull, counterclockwise on the
+    // triangulation grid and rotated to start at the lowest input index. A
+    // collinear result contains its two geometric endpoints.
+    std::vector<std::uint32_t> hull;
+
+    // One entry per input point. Coincident inputs map to the lowest original
+    // index retained at that integer or quantized coordinate.
+    std::vector<std::uint32_t> representatives;
+
+    // Populated for float input and zero-initialized for integer input.
+    QuantizationReport quantization;
+    PredicateWidth predicate_width = PredicateWidth::Unsupported;
+    std::size_t actual_thread_count = 1;
+};
+
 // Integer divide-and-conquer triangulator using a compact two-dart primal
 // edge ring. Reuse an instance across calls, but do not call the same instance
 // concurrently.
@@ -118,6 +141,21 @@ public:
         const float* ys,
         std::size_t point_count,
         QuantizationReport& report);
+
+    // Opt-in complete results. Existing triangle-only overloads do not
+    // construct adjacency, hull, or representative vectors.
+    TriangulationResult triangulate_int_full(
+        const std::vector<Point>& points);
+    TriangulationResult triangulate_int_full(
+        const std::int32_t* xs,
+        const std::int32_t* ys,
+        std::size_t point_count);
+    TriangulationResult triangulate_float_full(
+        const std::vector<FloatPoint>& points);
+    TriangulationResult triangulate_float_full(
+        const float* xs,
+        const float* ys,
+        std::size_t point_count);
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
@@ -224,12 +262,22 @@ private:
     static void require_point_count(std::size_t point_count);
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
     template <typename XAt, typename YAt>
-    std::vector<Triangle> triangulate_float_impl(
+    void load_int_points(
+        std::size_t point_count,
+        XAt x_at,
+        YAt y_at);
+    template <typename XAt, typename YAt>
+    PredicateWidth triangulate_float_impl(
         std::size_t point_count,
         XAt x_at,
         YAt y_at,
-        QuantizationReport* report);
+        QuantizationReport* report,
+        std::vector<std::uint32_t>* representatives);
     void triangulate_loaded_points();
+    TriangulationResult make_result(
+        const QuantizationReport& quantization,
+        PredicateWidth predicate_width,
+        std::vector<std::uint32_t>&& representatives);
     void sort_points_morton(
         std::size_t thread_count,
         std::uint32_t maximum_key,

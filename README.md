@@ -25,6 +25,7 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Deterministic handling of duplicate points
 - Triangle indices referencing the original input, counterclockwise on the
   triangulation grid
+- Opt-in halfedge adjacency, convex hull, and duplicate representative mapping
 - Efficient struct-of-arrays API for existing integer buffers
 - Uniform float quantization with an optional precision and collision report
 - MIT licensed and dependency-free for normal library use
@@ -238,6 +239,24 @@ degeneracies.
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
 are independent.
+
+### Full result
+
+Use the opt-in result API when traversal or input correspondence is needed:
+
+```cpp
+const delaunay32::TriangulationResult result =
+    triangulator.triangulate_int_full(points);
+
+// result.triangles       face indices, as in triangulate_int()
+// result.halfedges       opposite flattened edge, or -1 on the hull
+// result.hull            counterclockwise original input indices
+// result.representatives input index -> retained representative index
+```
+
+The result also reports the predicate width and actual thread count. Float
+results include their `QuantizationReport`. The triangle-only APIs do not
+construct any of the additional fields.
 
 The [usage guide](docs/usage.md) gives the exact integer span limits, explains
 every `QuantizationReport` field, lists all overloads and exceptions, and covers
