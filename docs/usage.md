@@ -97,6 +97,12 @@ requested. Reusing an instance avoids rebuilding its working storage and worker
 team. Do not call the same instance concurrently; use separate instances for
 independent concurrent calls.
 
+Parallel topology construction uses a fixed arena so workers can safely retain
+integer edge indices. If an unusual input exhausts its measured headroom, the
+partial parallel topology is discarded and the call transparently restarts
+with the growable serial allocator. This recovery can change execution time,
+but not the documented geometric guarantees or accepted input domain.
+
 The requested thread count can be inspected or changed between calls:
 
 ```cpp

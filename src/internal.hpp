@@ -12,6 +12,16 @@
 
 namespace delaunay32::detail {
 
+// Internal control-flow signal used to retry a valid triangulation through the
+// growable serial allocator. Keeping this distinct from allocation failures and
+// other runtime errors ensures that only fixed-arena exhaustion is recovered.
+class ParallelEdgeArenaExhausted final : public std::exception {
+public:
+    const char* what() const noexcept override {
+        return "parallel edge arena exhausted";
+    }
+};
+
 class ThreadBarrier {
 public:
     explicit ThreadBarrier(std::size_t participants)

@@ -36,13 +36,14 @@ function(delaunay32_enable_warnings target)
     endif()
 endfunction()
 
-add_library(delaunay32
+set(DELAUNAY32_LIBRARY_SOURCES
     src/delaunay.cpp
     src/export.cpp
     src/internal.hpp
     src/topology.cpp
     src/worker_team.cpp
 )
+add_library(delaunay32 ${DELAUNAY32_LIBRARY_SOURCES})
 add_library(delaunay32::delaunay32 ALIAS delaunay32)
 target_compile_features(delaunay32 PUBLIC cxx_std_17)
 target_include_directories(delaunay32
@@ -121,6 +122,38 @@ if(DELAUNAY32_BUILD_TESTS)
         PRIVATE delaunay32::delaunay32 delaunator_baseline)
     delaunay32_enable_warnings(delaunay_tests)
     add_test(NAME validation COMMAND delaunay_tests)
+
+    # Compile a private variant that deterministically exhausts the fixed
+    # parallel edge arena. This verifies the serial recovery path without
+    # exposing test controls in the public API or relying on pathological data.
+    add_library(
+        delaunay32_limited_parallel_arena STATIC
+        ${DELAUNAY32_LIBRARY_SOURCES})
+    target_compile_features(
+        delaunay32_limited_parallel_arena PUBLIC cxx_std_17)
+    target_include_directories(
+        delaunay32_limited_parallel_arena
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(
+        delaunay32_limited_parallel_arena PUBLIC Threads::Threads)
+    target_compile_definitions(
+        delaunay32_limited_parallel_arena
+        PRIVATE DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT=262144)
+    delaunay32_enable_warnings(delaunay32_limited_parallel_arena)
+
+    add_executable(
+        delaunay_parallel_fallback_tests
+        tests/parallel_fallback.cpp)
+    target_include_directories(
+        delaunay_parallel_fallback_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+    target_link_libraries(
+        delaunay_parallel_fallback_tests
+        PRIVATE delaunay32_limited_parallel_arena)
+    delaunay32_enable_warnings(delaunay_parallel_fallback_tests)
+    add_test(
+        NAME parallel_arena_fallback
+        COMMAND delaunay_parallel_fallback_tests)
 
     if(DELAUNAY32_BUILD_EXAMPLES)
         add_test(

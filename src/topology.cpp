@@ -647,14 +647,21 @@ void Triangulator::acquire_edge_block(EdgeCursor& cursor) {
     if (cursor.block_counter == nullptr) {
         throw std::logic_error("parallel edge cursor has no block counter");
     }
+    std::size_t capacity_limit = edge_capacity_limit_;
+#if defined(DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT)
+    capacity_limit = std::min(
+        capacity_limit,
+        static_cast<std::size_t>(
+            DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT));
+#endif
     const std::size_t first =
         cursor.block_counter->fetch_add(
             kEdgeBlockDarts, std::memory_order_relaxed);
-    if (first >= edge_capacity_limit_) {
-        throw std::runtime_error("parallel edge arena exhausted");
+    if (first >= capacity_limit) {
+        throw detail::ParallelEdgeArenaExhausted{};
     }
     const std::size_t last =
-        std::min(first + kEdgeBlockDarts, edge_capacity_limit_);
+        std::min(first + kEdgeBlockDarts, capacity_limit);
     cursor.next = static_cast<std::uint32_t>(first);
     cursor.end = static_cast<std::uint32_t>(last);
     cursor.range_first = cursor.next;

@@ -543,17 +543,30 @@ void Triangulator::triangulate_loaded_points() {
         edge_prev_.resize(edge_capacity);
     }
     active_thread_count_ = effective_threads;
-    const DirectionalHulls hull =
-        effective_threads > 1
-            ? (wide_predicates
-                   ? build_parallel<true>(
-                         effective_threads, *workers)
-                   : build_parallel<false>(
-                         effective_threads, *workers))
-            : (wide_predicates
+    DirectionalHulls hull;
+    bool serial_build = effective_threads == 1;
+    if (!serial_build) {
+        try {
+            hull = wide_predicates
+                       ? build_parallel<true>(
+                             effective_threads, *workers)
+                       : build_parallel<false>(
+                             effective_threads, *workers);
+        } catch (const detail::ParallelEdgeArenaExhausted&) {
+            // The parallel arena deliberately cannot grow while workers hold
+            // indices into it. Discard the partial topology and rebuild using
+            // the serial allocator, which grows its arrays as needed. Leaf
+            // sorting and wide lifts are recomputed during the serial build.
+            edge_count_ = 0;
+            edge_ranges_.clear();
+            active_thread_count_ = 1;
+            serial_build = true;
+        }
+    }
+    if (serial_build) {
+        hull = wide_predicates
                    ? build_morton_range<true>(0, point_count)
-                   : build_morton_range<false>(0, point_count));
-    if (effective_threads == 1) {
+                   : build_morton_range<false>(0, point_count);
         edge_ranges_.push_back(
             {0, static_cast<std::uint32_t>(edge_count_)});
     }

@@ -130,7 +130,8 @@ private:
     // Deleted darts remain in the append-only arena. Production benchmarks
     // use about 8.1 darts/point, so 9 provides measured headroom but is not a
     // geometric upper bound. Serial allocation can grow; parallel allocation
-    // is fixed because workers hold indices into these arrays.
+    // is fixed because workers hold indices into these arrays. Exhaustion
+    // transparently discards the partial topology and retries serially.
     static constexpr std::size_t kEdgeArenaDartsPerPoint = 9;
     static constexpr std::uint32_t kVisitedBit = 0x80000000U;
     static constexpr std::uint32_t kIndexMask = 0x7fffffffU;
