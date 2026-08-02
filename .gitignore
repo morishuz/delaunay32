@@ -24,3 +24,6 @@ core
 .idea/
 *.swp
 *~
+
+# Local project planning notes
+/local-notes/
