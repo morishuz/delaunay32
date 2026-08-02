@@ -13,7 +13,7 @@ cmake-build-*/
 *.dSYM/
 
 # Generated examples and profiles
-/mesh*.svg
+/*.svg
 *.profraw
 *.profdata
 core

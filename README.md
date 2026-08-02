@@ -33,6 +33,7 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 
 - [Usage guide](docs/usage.md): complete API, type, exactness, quantization,
   threading, and error contracts
+- [Changelog](CHANGELOG.md): release notes and breaking API changes
 - [Float SVG example](examples/delaunay_float_example.cpp): end-to-end float
   input with a `QuantizationReport`
 - [Integer SVG example](examples/delaunay_svg_example.cpp): generated or CSV
@@ -376,7 +377,7 @@ production path stays readable.
 
 Delaunay32 follows Semantic Versioning. The version in `CMakeLists.txt` is the
 single source of truth, and published releases use annotated tags such as
-`v0.2.0`. Tags are created from tested commits on `main`, never from feature
+`v0.3.0`. Tags are created from tested commits on `main`, never from feature
 branches. See the [release process](docs/releasing.md) for the checklist.
 
 ## Scope
