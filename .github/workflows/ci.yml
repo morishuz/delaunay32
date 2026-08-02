@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   build:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -34,8 +35,52 @@ jobs:
       - name: Install
         run: cmake --install build --prefix staging
 
+      - name: Configure installed-package consumer
+        run: >-
+          cmake -S tests/package_consumer -B consumer-build
+          -DCMAKE_PREFIX_PATH="${{ github.workspace }}/staging"
+
+      - name: Build installed-package consumer
+        run: cmake --build consumer-build -j 2
+
+      - name: Validate installed-package consumer
+        run: ctest --test-dir consumer-build --output-on-failure
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Validate
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install build --config Release --prefix staging
+
+      - name: Configure installed-package consumer
+        run: >-
+          cmake -S tests/package_consumer -B consumer-build
+          -DCMAKE_PREFIX_PATH="${{ github.workspace }}/staging"
+
+      - name: Build installed-package consumer
+        run: cmake --build consumer-build --config Release --parallel 2
+
+      - name: Validate installed-package consumer
+        run: >-
+          ctest --test-dir consumer-build -C Release --output-on-failure
+
   sanitizers:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,3 +100,50 @@ jobs:
 
       - name: Validate
         run: ctest --test-dir build-sanitize --output-on-failure
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build-thread-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DDELAUNAY32_BUILD_BENCHMARKS=OFF
+          -DDELAUNAY32_BUILD_EXAMPLES=OFF
+          -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+
+      - name: Build
+        run: cmake --build build-thread-sanitize -j 2
+
+      - name: Validate
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build-thread-sanitize --output-on-failure
+
+  forced-int64-predicates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build-int64
+          -DCMAKE_BUILD_TYPE=Debug
+          -DDELAUNAY32_BUILD_BENCHMARKS=OFF
+          -DDELAUNAY32_BUILD_EXAMPLES=OFF
+          -DCMAKE_CXX_FLAGS="-U__SIZEOF_INT128__"
+
+      - name: Build
+        run: cmake --build build-int64 -j 2
+
+      - name: Validate
+        run: ctest --test-dir build-int64 --output-on-failure

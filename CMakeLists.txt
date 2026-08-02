@@ -123,6 +123,18 @@ if(DELAUNAY32_BUILD_TESTS)
     delaunay32_enable_warnings(delaunay_tests)
     add_test(NAME validation COMMAND delaunay_tests)
 
+    add_executable(
+        delaunay_stress_tests
+        tests/stress_validation.cpp)
+    target_include_directories(
+        delaunay_stress_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+    target_link_libraries(
+        delaunay_stress_tests PRIVATE delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay_stress_tests)
+    add_test(NAME stress_validation COMMAND delaunay_stress_tests)
+    set_tests_properties(stress_validation PROPERTIES TIMEOUT 300)
+
     # Compile a private variant that deterministically exhausts the fixed
     # parallel edge arena. This verifies the serial recovery path without
     # exposing test controls in the public API or relying on pathological data.
@@ -154,6 +166,7 @@ if(DELAUNAY32_BUILD_TESTS)
     add_test(
         NAME parallel_arena_fallback
         COMMAND delaunay_parallel_fallback_tests)
+    set_tests_properties(parallel_arena_fallback PROPERTIES TIMEOUT 300)
 
     if(DELAUNAY32_BUILD_EXAMPLES)
         add_test(
