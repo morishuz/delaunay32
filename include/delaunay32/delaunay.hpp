@@ -21,7 +21,7 @@ struct Point {
 };
 
 // A floating-point site for the convenience quantization API. Output triangle
-// indices always refer back to this original, unmodified input.
+// indices always refer back to the original, unmodified input.
 struct FloatPoint {
     float x = 0.0F;
     float y = 0.0F;
@@ -30,7 +30,7 @@ struct FloatPoint {
 // Indices into the caller's original point array, counterclockwise in the
 // coordinates used for triangulation. For float input, that means the internal
 // quantized coordinates; near-degenerate source geometry may have a different
-// winding after the original float coordinates are restored.
+// winding after the original coordinates are restored.
 struct Triangle {
     std::uint32_t i0 = 0;
     std::uint32_t i1 = 0;
@@ -43,9 +43,35 @@ enum class PredicateWidth {
     Unsupported,
 };
 
-// Describes the uniform source-to-integer mapping used by float triangulation.
-// Returned as TriangulationResult::quantization by triangulate_float_full().
-// Quantized coordinates are round((value - origin) * scale).
+enum class QuantizationMode {
+    // Use the finest uniform grid supported by the active predicate backend.
+    Automatic,
+    // Use QuantizationOptions::grid_step and the input minima as the origin.
+    GridStep,
+    // Use QuantizationOptions::origin_x, origin_y, and scale verbatim.
+    FixedScale,
+};
+
+enum class QuantizationCollisionPolicy {
+    Allow,
+    Reject,
+};
+
+// Configuration for float input. A positive
+// max_coordinate_error is an additional acceptance limit in every mode.
+struct QuantizationOptions {
+    QuantizationMode mode = QuantizationMode::Automatic;
+    double grid_step = 0.0;
+    double origin_x = 0.0;
+    double origin_y = 0.0;
+    double scale = 0.0;
+    double max_coordinate_error = 0.0;
+    QuantizationCollisionPolicy collision_policy =
+        QuantizationCollisionPolicy::Allow;
+};
+
+// Describes the uniform source-to-integer mapping used by floating-point
+// triangulation. Quantized coordinates are round((value - origin) * scale).
 struct QuantizationReport {
     double origin_x = 0.0;
     double origin_y = 0.0;
@@ -119,18 +145,20 @@ public:
     // the lowest original input index for each retained site.
     std::vector<Triangle> triangulate_int(
         const std::vector<Point>& points);
-    // Uniformly quantizes finite float coordinates into the largest certified
-    // integer square domain. The returned indices still reference the original
-    // float input; only topology decisions use the quantized coordinates.
-    std::vector<Triangle> triangulate_float(
-        const std::vector<FloatPoint>& points);
 
+    // Uniformly quantizes finite floating-point coordinates. The returned
+    // indices still reference the original input; only topology decisions use
+    // the quantized coordinates.
+    std::vector<Triangle> triangulate_float(
+        const std::vector<FloatPoint>& points,
+        const QuantizationOptions& options = {});
     // Opt-in complete results. Existing triangle-only overloads do not
     // construct adjacency, hull, or representative vectors.
     TriangulationResult triangulate_int_full(
         const std::vector<Point>& points);
     TriangulationResult triangulate_float_full(
-        const std::vector<FloatPoint>& points);
+        const std::vector<FloatPoint>& points,
+        const QuantizationOptions& options = {});
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
@@ -241,9 +269,11 @@ private:
     void load_int_points(const std::vector<Point>& points);
     void load_float_points(
         const std::vector<FloatPoint>& points,
+        const QuantizationOptions& options,
         QuantizationReport* report);
     PredicateWidth triangulate_loaded_points(
-        std::vector<std::uint32_t>* representatives = nullptr);
+        std::vector<std::uint32_t>* representatives = nullptr,
+        bool reject_duplicates = false);
     TriangulationResult make_result(
         const QuantizationReport& quantization,
         PredicateWidth predicate_width,

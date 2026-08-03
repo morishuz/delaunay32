@@ -32,7 +32,11 @@ int main() {
         {0.0F, 1.0F},
         {0.5F, 0.5F},
     };
-    if (triangulator.triangulate_float(float_points).size() != 4) {
+    delaunay32::QuantizationOptions grid_options;
+    grid_options.mode = delaunay32::QuantizationMode::GridStep;
+    grid_options.grid_step = 0.125;
+    if (triangulator.triangulate_float(
+            float_points, grid_options).size() != 4) {
         return 3;
     }
     const delaunay32::TriangulationResult float_result =

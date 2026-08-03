@@ -42,16 +42,29 @@ struct FloatQuantizer {
     double origin_y = 0.0;
     double scale = 0.0;
     double target_span = 0.0;
+    bool clamp_to_target = false;
+
+    double map(double value, double origin) const {
+        return (value - origin) * scale;
+    }
 
     std::int32_t quantize(double value, double origin) const {
         if (scale == 0.0) {
             return 0;
         }
-        const double mapped = std::clamp(
-            (value - origin) * scale,
-            0.0,
-            target_span);
-        return static_cast<std::int32_t>(std::llround(mapped));
+        double mapped = map(value, origin);
+        if (clamp_to_target) {
+            mapped = std::clamp(mapped, 0.0, target_span);
+            return static_cast<std::int32_t>(std::llround(mapped));
+        }
+        const double rounded = std::round(mapped);
+        if (!std::isfinite(rounded) ||
+            rounded < std::numeric_limits<std::int32_t>::min() ||
+            rounded > std::numeric_limits<std::int32_t>::max()) {
+            throw std::invalid_argument(
+                "quantized coordinate is outside the int32 range");
+        }
+        return static_cast<std::int32_t>(rounded);
     }
 
     double error(
@@ -59,19 +72,22 @@ struct FloatQuantizer {
         double origin,
         std::int32_t quantized) const {
         if (scale == 0.0) {
-            return 0.0;
+            return std::abs(value - origin);
         }
-        const double reconstructed =
-            origin + static_cast<double>(quantized) / scale;
-        return std::abs(reconstructed - value);
+        return std::abs(
+                   map(value, origin) -
+                   static_cast<double>(quantized)) /
+               scale;
     }
 };
 
-FloatBounds find_float_bounds(const std::vector<FloatPoint>& points) {
+FloatBounds find_float_bounds(
+    const std::vector<FloatPoint>& points) {
     const double first_x = points[0].x;
     const double first_y = points[0].y;
     if (!std::isfinite(first_x) || !std::isfinite(first_y)) {
-        throw std::invalid_argument("float coordinates must be finite");
+        throw std::invalid_argument(
+            "floating-point coordinates must be finite");
     }
 
     FloatBounds bounds{first_x, first_y, first_x, first_y};
@@ -79,7 +95,8 @@ FloatBounds find_float_bounds(const std::vector<FloatPoint>& points) {
         const double x = points[i].x;
         const double y = points[i].y;
         if (!std::isfinite(x) || !std::isfinite(y)) {
-            throw std::invalid_argument("float coordinates must be finite");
+            throw std::invalid_argument(
+                "floating-point coordinates must be finite");
         }
         bounds.min_x = std::min(bounds.min_x, x);
         bounds.min_y = std::min(bounds.min_y, y);
@@ -89,18 +106,79 @@ FloatBounds find_float_bounds(const std::vector<FloatPoint>& points) {
     return bounds;
 }
 
-FloatQuantizer make_float_quantizer(const FloatBounds& bounds) {
-    const double maximum_span = std::max(
-        bounds.max_x - bounds.min_x,
-        bounds.max_y - bounds.min_y);
+FloatQuantizer make_float_quantizer(
+    const FloatBounds& bounds,
+    const QuantizationOptions& options) {
     const double target_span =
         static_cast<double>(Triangulator::kMaxCoordinateSpan);
-    return {
-        bounds.min_x,
-        bounds.min_y,
-        maximum_span == 0.0 ? 0.0 : target_span / maximum_span,
-        target_span,
-    };
+    if (!std::isfinite(options.max_coordinate_error) ||
+        options.max_coordinate_error < 0.0) {
+        throw std::invalid_argument(
+            "maximum coordinate error must be finite and nonnegative");
+    }
+    if (options.collision_policy !=
+            QuantizationCollisionPolicy::Allow &&
+        options.collision_policy !=
+            QuantizationCollisionPolicy::Reject) {
+        throw std::invalid_argument(
+            "unknown quantization collision policy");
+    }
+
+    switch (options.mode) {
+        case QuantizationMode::Automatic: {
+            const double maximum_span = std::max(
+                bounds.max_x - bounds.min_x,
+                bounds.max_y - bounds.min_y);
+            return {
+                bounds.min_x,
+                bounds.min_y,
+                maximum_span == 0.0
+                    ? 0.0
+                    : target_span / maximum_span,
+                target_span,
+                true,
+            };
+        }
+        case QuantizationMode::GridStep: {
+            if (!std::isfinite(options.grid_step) ||
+                options.grid_step <= 0.0) {
+                throw std::invalid_argument(
+                    "quantization grid step must be finite and positive");
+            }
+            const double scale = 1.0 / options.grid_step;
+            if (!std::isfinite(scale) || scale <= 0.0) {
+                throw std::invalid_argument(
+                    "quantization grid step produces an invalid scale");
+            }
+            return {
+                bounds.min_x,
+                bounds.min_y,
+                scale,
+                target_span,
+                false,
+            };
+        }
+        case QuantizationMode::FixedScale: {
+            if (!std::isfinite(options.origin_x) ||
+                !std::isfinite(options.origin_y)) {
+                throw std::invalid_argument(
+                    "fixed quantization origin must be finite");
+            }
+            if (!std::isfinite(options.scale) || options.scale <= 0.0 ||
+                !std::isfinite(1.0 / options.scale)) {
+                throw std::invalid_argument(
+                    "fixed quantization scale must be finite and positive");
+            }
+            return {
+                options.origin_x,
+                options.origin_y,
+                options.scale,
+                target_span,
+                false,
+            };
+        }
+    }
+    throw std::invalid_argument("unknown quantization mode");
 }
 
 void initialize_quantization_report(
@@ -268,10 +346,15 @@ std::vector<Triangle> Triangulator::triangulate_int(
 
 void Triangulator::load_float_points(
     const std::vector<FloatPoint>& points,
+    const QuantizationOptions& options,
     QuantizationReport* report) {
     const FloatBounds bounds = find_float_bounds(points);
-    const FloatQuantizer quantizer = make_float_quantizer(bounds);
-    initialize_quantization_report(report, quantizer);
+    const FloatQuantizer quantizer =
+        make_float_quantizer(bounds, options);
+    QuantizationReport measured;
+    initialize_quantization_report(&measured, quantizer);
+    const bool measure_error =
+        report != nullptr || options.max_coordinate_error > 0.0;
 
     points_.resize(points.size());
     for (std::size_t i = 0; i < points.size(); ++i) {
@@ -291,21 +374,32 @@ void Triangulator::load_float_points(
             max_y_ = std::max(max_y_, y);
         }
         points_[i] = {x, y, static_cast<std::uint32_t>(i), 0};
-        if (report != nullptr) {
-            report->max_coordinate_error = std::max({
-                report->max_coordinate_error,
+        if (measure_error) {
+            measured.max_coordinate_error = std::max({
+                measured.max_coordinate_error,
                 quantizer.error(input_x, quantizer.origin_x, x),
                 quantizer.error(input_y, quantizer.origin_y, y),
             });
         }
     }
+    if (options.max_coordinate_error > 0.0 &&
+        measured.max_coordinate_error > options.max_coordinate_error) {
+        throw std::invalid_argument(
+            "quantization exceeds the requested maximum coordinate error");
+    }
+    if (report != nullptr) {
+        *report = measured;
+    }
 }
 
 std::vector<Triangle> Triangulator::triangulate_float(
-    const std::vector<FloatPoint>& points) {
+    const std::vector<FloatPoint>& points,
+    const QuantizationOptions& options) {
     require_point_count(points.size());
-    load_float_points(points, nullptr);
-    triangulate_loaded_points();
+    load_float_points(points, options, nullptr);
+    triangulate_loaded_points(
+        nullptr,
+        options.collision_policy == QuantizationCollisionPolicy::Reject);
     return std::move(triangles_out_);
 }
 
@@ -321,13 +415,16 @@ TriangulationResult Triangulator::triangulate_int_full(
 }
 
 TriangulationResult Triangulator::triangulate_float_full(
-    const std::vector<FloatPoint>& points) {
+    const std::vector<FloatPoint>& points,
+    const QuantizationOptions& options) {
     require_point_count(points.size());
     QuantizationReport report;
-    load_float_points(points, &report);
+    load_float_points(points, options, &report);
     std::vector<std::uint32_t> representatives;
     const PredicateWidth predicate_width =
-        triangulate_loaded_points(&representatives);
+        triangulate_loaded_points(
+            &representatives,
+            options.collision_policy == QuantizationCollisionPolicy::Reject);
     report.unique_points = points_.size();
     report.collapsed_points = points.size() - points_.size();
     return make_result(
@@ -337,7 +434,8 @@ TriangulationResult Triangulator::triangulate_float_full(
 }
 
 PredicateWidth Triangulator::triangulate_loaded_points(
-    std::vector<std::uint32_t>* representatives) {
+    std::vector<std::uint32_t>* representatives,
+    bool reject_duplicates) {
     std::size_t point_count = points_.size();
     if (representatives != nullptr) {
         representatives->resize(point_count);
@@ -483,6 +581,10 @@ PredicateWidth Triangulator::triangulate_loaded_points(
         if (wide_predicates) {
             wide_lifts_.resize(unique_count);
         }
+    }
+    if (reject_duplicates && unique_count != point_count) {
+        throw std::invalid_argument(
+            "quantization produced coincident points");
     }
     if (unique_count < 3) {
         throw std::invalid_argument("need at least 3 unique points");

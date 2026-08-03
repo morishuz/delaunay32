@@ -397,6 +397,86 @@ void test_float_api() {
         "full and triangle-only float APIs differ");
 }
 
+void test_quantization_options() {
+    const std::vector<FloatPoint> points = {
+        {0.125F, 0.125F},
+        {2.125F, 0.125F},
+        {2.125F, 2.125F},
+        {0.125F, 2.125F},
+        {1.125F, 0.875F},
+    };
+    QuantizationOptions grid_options;
+    grid_options.mode = QuantizationMode::GridStep;
+    grid_options.grid_step = 0.25;
+
+    Triangulator triangulator;
+    const TriangulationResult grid_result =
+        triangulator.triangulate_float_full(points, grid_options);
+    require(
+        grid_result.quantization.origin_x == 0.125 &&
+            grid_result.quantization.origin_y == 0.125 &&
+            grid_result.quantization.scale == 4.0 &&
+            grid_result.quantization.grid_step == 0.25,
+        "grid-step quantization report is incorrect");
+    const std::vector<Point> grid_points =
+        quantize_from_report(points, grid_result.quantization);
+    require(
+        benchmark_support::meshes_equal(
+            grid_result.triangles,
+            triangulator.triangulate_int(grid_points)),
+        "grid-step float mesh differs from its integer mapping");
+
+    QuantizationOptions fixed_options;
+    fixed_options.mode = QuantizationMode::FixedScale;
+    fixed_options.origin_x = -10.0;
+    fixed_options.origin_y = -20.0;
+    fixed_options.scale = 8.0;
+    const TriangulationResult fixed_result =
+        triangulator.triangulate_float_full(points, fixed_options);
+    require(
+        fixed_result.quantization.origin_x == -10.0 &&
+            fixed_result.quantization.origin_y == -20.0 &&
+            fixed_result.quantization.scale == 8.0,
+        "fixed quantization report is incorrect");
+    require(
+        benchmark_support::meshes_equal(
+            fixed_result.triangles,
+            triangulator.triangulate_int(
+                quantize_from_report(
+                    points, fixed_result.quantization))),
+        "fixed-scale float mesh differs from its integer mapping");
+
+    QuantizationOptions strict_error = grid_options;
+    strict_error.max_coordinate_error = 0.05;
+    const std::vector<FloatPoint> inexact = {
+        {0.0F, 0.0F},
+        {2.0F, 0.0F},
+        {0.0F, 2.0F},
+        {0.12F, 0.12F},
+    };
+    require_invalid(
+        [&] { triangulator.triangulate_float(inexact, strict_error); },
+        "requested maximum quantization error");
+
+    QuantizationOptions reject_collisions;
+    reject_collisions.mode = QuantizationMode::GridStep;
+    reject_collisions.grid_step = 1.0;
+    reject_collisions.collision_policy =
+        QuantizationCollisionPolicy::Reject;
+    const std::vector<FloatPoint> colliding = {
+        {0.0F, 0.0F},
+        {0.2F, 0.2F},
+        {2.0F, 0.0F},
+        {0.0F, 2.0F},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(
+                colliding, reject_collisions);
+        },
+        "rejected quantization collision");
+}
+
 void test_float_quantization_collisions() {
     const float maximum = std::numeric_limits<float>::max();
     const std::vector<FloatPoint> points = {
@@ -677,6 +757,31 @@ void test_invalid_inputs() {
             });
         },
         "infinite float coordinate");
+    QuantizationOptions invalid_grid;
+    invalid_grid.mode = QuantizationMode::GridStep;
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(
+                std::vector<FloatPoint>{
+                    {0.0F, 0.0F}, {1.0F, 0.0F}, {0.0F, 1.0F},
+                },
+                invalid_grid);
+        },
+        "zero quantization grid step");
+    QuantizationOptions invalid_fixed;
+    invalid_fixed.mode = QuantizationMode::FixedScale;
+    invalid_fixed.origin_x = 0.0;
+    invalid_fixed.origin_y = 0.0;
+    invalid_fixed.scale = -1.0;
+    require_invalid(
+        [&] {
+            triangulator.triangulate_float(
+                std::vector<FloatPoint>{
+                    {0.0F, 0.0F}, {1.0F, 0.0F}, {0.0F, 1.0F},
+                },
+                invalid_fixed);
+        },
+        "negative fixed quantization scale");
     const float maximum = std::numeric_limits<float>::max();
     require_invalid(
         [&] {
@@ -719,6 +824,7 @@ int main() {
         delaunay32::test_deterministic_cases();
         delaunay32::test_full_integer_result();
         delaunay32::test_float_api();
+        delaunay32::test_quantization_options();
         delaunay32::test_float_quantization_collisions();
         delaunay32::test_full_float_result();
         delaunay32::test_float_parallel();
@@ -729,8 +835,8 @@ int main() {
         delaunay32::test_invalid_inputs();
         std::cout
             << "validation passed: deterministic, duplicate, collinear, "
-               "integer/float/full API, predicate-width, and parallel "
-               "cases\n";
+               "integer/float/full API, quantization options, "
+               "predicate-width, and parallel cases\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "validation failed: " << error.what() << '\n';

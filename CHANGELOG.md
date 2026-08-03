@@ -3,6 +3,19 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Configurable floating-point quantization with automatic, requested-grid-step,
+  and fixed-origin/scale modes, plus error limits and collision rejection.
+
+### Fixed
+
+- Parallel topology and export now abort their phase barriers when a worker
+  throws, preventing an exception from stranding another worker while retaining
+  the existing single-run fast path.
+
 ## 0.3.0 - 2026-08-02
 
 ### Added

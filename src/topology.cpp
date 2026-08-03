@@ -5,8 +5,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <exception>
-#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -398,34 +396,24 @@ Triangulator::build_parallel(
     }
     std::atomic<std::size_t> next_job{0};
     std::atomic<bool> cancelled{false};
-    std::exception_ptr first_exception;
-    std::mutex exception_mutex;
     const std::size_t worker_count =
         std::min(thread_count, leaves.size());
     ThreadBarrier barrier(worker_count);
-    const auto record_exception = [&] {
-        cancelled.store(true, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> lock(exception_mutex);
-        if (first_exception == nullptr) {
-            first_exception = std::current_exception();
-        }
-    };
     const auto run_jobs = [&](std::size_t worker_index) {
-        // Parallel topology proceeds bottom-up:
-        //
-        //   independent leaves -> barrier -> height-1 merges -> barrier -> ...
-        //
-        // Worker 0 resets the shared job cursor before each level. The first
-        // level barrier publishes that reset; the second ensures every child
-        // hull is complete before a parent level starts.
-        while (!cancelled.load(std::memory_order_relaxed)) {
-            const std::size_t job =
-                next_job.fetch_add(1, std::memory_order_relaxed);
-            if (job >= leaves.size()) {
-                break;
-            }
-            EdgeCursor& cursor = leaf_cursors[job];
-            try {
+        try {
+            // Parallel topology proceeds bottom-up:
+            //
+            //   independent leaves -> barrier -> height-1 merges -> ...
+            //
+            // An abortable barrier retains the single worker-team run used by
+            // the fast path while releasing peers if allocation throws.
+            while (!cancelled.load(std::memory_order_relaxed)) {
+                const std::size_t job =
+                    next_job.fetch_add(1, std::memory_order_relaxed);
+                if (job >= leaves.size()) {
+                    break;
+                }
+                EdgeCursor& cursor = leaf_cursors[job];
                 ParallelNode& node = nodes[leaves[job]];
                 node.hull =
                     build_morton_range<WidePredicates, true>(
@@ -433,32 +421,30 @@ Triangulator::build_parallel(
                         node.last,
                         &cursor);
                 finish_edge_cursor(cursor);
-            } catch (...) {
-                finish_edge_cursor(cursor);
-                record_exception();
-                break;
             }
-        }
-        barrier.wait();
+            if (!barrier.wait()) {
+                return;
+            }
 
-        for (std::size_t level = 1;
-             level < merge_levels.size();
-             ++level) {
-            if (worker_index == 0) {
-                next_job.store(0, std::memory_order_relaxed);
-            }
-            barrier.wait();
-            while (!cancelled.load(std::memory_order_relaxed)) {
-                const std::size_t job =
-                    next_job.fetch_add(1, std::memory_order_relaxed);
-                if (job >= merge_levels[level].size()) {
-                    break;
+            for (std::size_t level = 1;
+                 level < merge_levels.size();
+                 ++level) {
+                if (worker_index == 0) {
+                    next_job.store(0, std::memory_order_relaxed);
                 }
-                const std::size_t node_index =
-                    merge_levels[level][job];
-                ParallelNode& node = nodes[node_index];
-                EdgeCursor& cursor = node_cursors[node_index];
-                try {
+                if (!barrier.wait()) {
+                    return;
+                }
+                while (!cancelled.load(std::memory_order_relaxed)) {
+                    const std::size_t job =
+                        next_job.fetch_add(1, std::memory_order_relaxed);
+                    if (job >= merge_levels[level].size()) {
+                        break;
+                    }
+                    const std::size_t node_index =
+                        merge_levels[level][job];
+                    ParallelNode& node = nodes[node_index];
+                    EdgeCursor& cursor = node_cursors[node_index];
                     const DirectionalHulls& left =
                         nodes[node.left].hull;
                     const DirectionalHulls& right =
@@ -477,20 +463,19 @@ Triangulator::build_parallel(
                             : scan_merged_hulls<false>(
                                   sym(merged.left_outer), merged);
                     finish_edge_cursor(cursor);
-                } catch (...) {
-                    finish_edge_cursor(cursor);
-                    record_exception();
-                    break;
+                }
+                if (!barrier.wait()) {
+                    return;
                 }
             }
-            barrier.wait();
+        } catch (...) {
+            cancelled.store(true, std::memory_order_relaxed);
+            barrier.abort();
+            throw;
         }
     };
 
     workers.run(worker_count, run_jobs);
-    if (first_exception != nullptr) {
-        std::rethrow_exception(first_exception);
-    }
     edge_count_ = 0;
     const auto collect_ranges = [&](const EdgeCursor& cursor) {
         for (const EdgeRange range : cursor.ranges) {

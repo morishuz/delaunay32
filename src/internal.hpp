@@ -27,22 +27,37 @@ public:
     explicit ThreadBarrier(std::size_t participants)
         : participants_(participants) {}
 
-    void wait() {
+    bool wait() {
         std::unique_lock<std::mutex> lock(mutex_);
+        if (aborted_) {
+            return false;
+        }
         const std::size_t generation = generation_;
         if (++arrived_ == participants_) {
             arrived_ = 0;
             ++generation_;
             condition_.notify_all();
-            return;
+            return true;
         }
-        condition_.wait(lock, [&] { return generation_ != generation; });
+        condition_.wait(lock, [&] {
+            return aborted_ || generation_ != generation;
+        });
+        return !aborted_;
+    }
+
+    void abort() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            aborted_ = true;
+        }
+        condition_.notify_all();
     }
 
 private:
     const std::size_t participants_;
     std::size_t arrived_ = 0;
     std::size_t generation_ = 0;
+    bool aborted_ = false;
     std::mutex mutex_;
     std::condition_variable condition_;
 };

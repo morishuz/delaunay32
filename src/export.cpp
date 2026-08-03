@@ -81,59 +81,68 @@ void Triangulator::export_triangles_parallel(
     std::vector<std::size_t> offsets(worker_count + 1, 0);
     ThreadBarrier barrier(worker_count);
 
-    // Export has three synchronized phases in one worker lifetime:
+    // Export keeps all phases in one worker lifetime. The barrier is abortable
+    // so a failed buffer growth or output resize releases waiting peers.
     //
-    //   one face walk into worker buffers -> prefix sum/resize
-    //                                     -> parallel contiguous copies
+    //   face walks into worker buffers -> caller prefix sum/resize
+    //                                  -> parallel contiguous copies
     //
     // Contiguous range partitions preserve the previous deterministic face
     // order. A face is owned by its smallest dart index, so workers never
     // mutate visited state while scanning.
     const auto run = [&](std::size_t worker_index) {
-        std::vector<Triangle> buffer;
-        buffer.swap(export_scratch_[worker_index]);
-        const std::size_t first_range =
-            edge_ranges_.size() * worker_index / worker_count;
-        const std::size_t last_range =
-            edge_ranges_.size() * (worker_index + 1) / worker_count;
-        for (std::size_t index = first_range;
-             index < last_range;
-             ++index) {
-            const EdgeRange range = edge_ranges_[index];
-            std::uint32_t second = 0;
-            std::uint32_t third = 0;
-            for (std::uint32_t start = range.first;
-                 start < range.last;
-                 ++start) {
-                if (find_export_face(start, second, third)) {
-                    buffer.push_back({
-                        points_[org(start)].original,
-                        points_[org(second)].original,
-                        points_[org(third)].original,
-                    });
+        try {
+            std::vector<Triangle> buffer;
+            buffer.swap(export_scratch_[worker_index]);
+            const std::size_t first_range =
+                edge_ranges_.size() * worker_index / worker_count;
+            const std::size_t last_range =
+                edge_ranges_.size() * (worker_index + 1) / worker_count;
+            for (std::size_t index = first_range;
+                 index < last_range;
+                 ++index) {
+                const EdgeRange range = edge_ranges_[index];
+                std::uint32_t second = 0;
+                std::uint32_t third = 0;
+                for (std::uint32_t start = range.first;
+                     start < range.last;
+                     ++start) {
+                    if (find_export_face(start, second, third)) {
+                        buffer.push_back({
+                            points_[org(start)].original,
+                            points_[org(second)].original,
+                            points_[org(third)].original,
+                        });
+                    }
                 }
             }
-        }
-        counts[worker_index] = buffer.size();
+            counts[worker_index] = buffer.size();
 
-        barrier.wait();
-        if (worker_index == 0) {
-            for (std::size_t i = 0; i < worker_count; ++i) {
-                offsets[i + 1] = offsets[i] + counts[i];
+            if (!barrier.wait()) {
+                return;
             }
-            triangles_out_.resize(offsets.back());
+            if (worker_index == 0) {
+                for (std::size_t i = 0; i < worker_count; ++i) {
+                    offsets[i + 1] = offsets[i] + counts[i];
+                }
+                triangles_out_.resize(offsets.back());
+            }
+
+            if (!barrier.wait()) {
+                return;
+            }
+            std::copy(
+                buffer.begin(),
+                buffer.end(),
+                triangles_out_.begin() +
+                    static_cast<std::ptrdiff_t>(offsets[worker_index]));
+            buffer.clear();
+            export_scratch_[worker_index].swap(buffer);
+        } catch (...) {
+            barrier.abort();
+            throw;
         }
-
-        barrier.wait();
-        std::copy(
-            buffer.begin(),
-            buffer.end(),
-            triangles_out_.begin() +
-                static_cast<std::ptrdiff_t>(offsets[worker_index]));
-        buffer.clear();
-        export_scratch_[worker_index].swap(buffer);
     };
-
     workers.run(worker_count, run);
 }
 

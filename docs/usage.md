@@ -18,9 +18,9 @@ struct Triangle {
 ```
 
 The library does not place coordinates inside the returned triangles. This is
-important for float input: the library quantizes coordinates internally to
-choose the connectivity, but the indices still address the unchanged source
-floats.
+important for floating-point input: the library quantizes coordinates
+internally to choose the connectivity, but the indices still address the
+unchanged source values.
 
 The opt-in `triangulate_int_full()` and `triangulate_float_full()` calls return
 the same faces plus halfedge adjacency, convex-hull indices, input
@@ -39,7 +39,7 @@ Use integer input when the coordinates are already discrete or when exact
 Delaunay decisions on a chosen integer grid are required. Direct float input is
 appropriate for most graphics, mapping, visualization, and general meshing
 workloads where retaining the source vertices matters more than reproducing
-the precise Delaunay edge set of the original floats.
+the precise Delaunay edge set of the original values.
 
 ## Public types
 
@@ -68,8 +68,8 @@ struct FloatPoint {
 ```
 
 `FloatPoint` supplies finite IEEE-style float coordinates. The input vector is
-read but never modified. Quantization is automatic and affects connectivity
-only; use the returned triangle indices to retrieve the original values.
+read but never modified. Quantization affects connectivity only; use the
+returned triangle indices to retrieve the original values.
 
 ### `Triangle`
 
@@ -79,8 +79,8 @@ original input index at that grid coordinate.
 
 Triangles are counterclockwise in the coordinates used for triangulation. That
 means the original integer coordinates for `triangulate_int()` and the internal
-quantized coordinates for `triangulate_float()`. In nearly degenerate float
-geometry, restoring the original floats can produce a different winding.
+quantized coordinates for `triangulate_float()`. In nearly degenerate source
+geometry, restoring the original coordinates can produce a different winding.
 
 ### `Triangulator`
 
@@ -115,10 +115,28 @@ const std::size_t requested = triangulator.thread_count();
 `thread_count()` reports the requested setting, not the number of workers used
 for a particular input.
 
+### `QuantizationOptions`
+
+`QuantizationOptions` configures float input. The default value uses
+automatic maximum-resolution quantization.
+
+| Field | Meaning |
+|:--|:--|
+| `mode` | `Automatic`, `GridStep`, or `FixedScale`. |
+| `grid_step` | Positive source-space step used by `GridStep`. |
+| `origin_x`, `origin_y` | Source-space origin used by `FixedScale`. |
+| `scale` | Positive integer units per source unit used by `FixedScale`. |
+| `max_coordinate_error` | Optional positive acceptance limit; zero disables the check. |
+| `collision_policy` | `Allow` or `Reject`; rejection includes exact duplicates and quantization collisions. |
+
+`GridStep` uses the input minima as its origin. `FixedScale` is the mode for a
+stable mapping across batches because its origin and scale do not depend on
+each batch's bounds. Every mode uses one scale for both axes.
+
 ### `QuantizationReport`
 
 `QuantizationReport` describes the mapping used by a completed full float
-triangulation. It does not configure or perform quantization.
+triangulation.
 
 ```cpp
 const auto result = triangulator.triangulate_float_full(points);
@@ -171,8 +189,8 @@ endpoints in `hull`.
 
 Every `representatives[i]` is the lowest input index at the same integer or
 quantized coordinate as input `i`. Unique points map to themselves. This makes
-duplicate removal and float quantization collisions explicit without changing
-the indices stored in `triangles` or `hull`.
+duplicate removal and floating-point quantization collisions explicit without
+changing the indices stored in `triangles` or `hull`.
 
 The full calls populate every field. Use the corresponding triangle-only call
 when adjacency, hull, representative mappings, and operation metadata are not
@@ -263,7 +281,7 @@ Int128:
 On compilers without `__int128`, `kMaxCoordinateSpan` equals
 `kFastCoordinateSpan`, and inputs requiring the wider path are rejected.
 
-## Float triangulation
+## Floating-point triangulation
 
 ### Vector input
 
@@ -299,10 +317,43 @@ if (report.collapsed_points != 0) {
 }
 ```
 
+### Configuring the mapping
+
+Automatic mode is the default. A caller-requested step can intentionally use a
+coarser, application-defined grid:
+
+```cpp
+delaunay32::QuantizationOptions options;
+options.mode = delaunay32::QuantizationMode::GridStep;
+options.grid_step = 0.001;
+options.max_coordinate_error = 0.0005;
+
+const auto result = triangulator.triangulate_float_full(points, options);
+```
+
+`GridStep` places the origin at the current input minima. To keep the same
+mapping across independent batches, supply both origin and scale:
+
+```cpp
+delaunay32::QuantizationOptions options;
+options.mode = delaunay32::QuantizationMode::FixedScale;
+options.origin_x = 500000.0;
+options.origin_y = 5800000.0;
+options.scale = 100.0; // one-centimetre grid when source units are metres
+options.collision_policy =
+    delaunay32::QuantizationCollisionPolicy::Reject;
+```
+
+A requested step or fixed mapping must still produce signed 32-bit coordinates
+whose spans fit an exact predicate path. A positive `max_coordinate_error`
+rejects a call when its measured error is larger. `Reject` rejects any shared
+grid coordinate, including an exact source duplicate; use a full result with
+`Allow` to inspect collision counts and representatives instead.
+
 ### How automatic quantization works
 
-Finite floats across the full float range are accepted. The library translates
-the input by its minimum bounds and applies one shared scale to both axes:
+Finite floats are accepted. The library translates the input by its minimum
+bounds and applies one shared scale to both axes:
 
 ```text
 span = max(max_x - min_x, max_y - min_y)
@@ -318,7 +369,7 @@ the target grid automatically uses the smaller certified 64-bit span.
 
 ### What is preserved
 
-- The input float values are never replaced or modified.
+- The input floating-point values are never replaced or modified.
 - Every triangle index addresses the caller's original input.
 - Aspect ratio is preserved by the uniform x/y scale.
 - Exact duplicates and quantization collisions retain their lowest input index.
@@ -326,8 +377,8 @@ the target grid automatically uses the smaller certified 64-bit span.
 ### What can change
 
 The connectivity is the exact Delaunay triangulation of the quantized integer
-points, not necessarily the Delaunay triangulation of the original float
-coordinates. Quantization can:
+points, not necessarily the Delaunay triangulation of the original
+floating-point coordinates. Quantization can:
 
 - merge points that are closer than the available grid resolution;
 - select a different diagonal for nearly cocircular configurations;
@@ -337,7 +388,7 @@ coordinates. Quantization can:
 Axis-aligned collinearity is preserved. For most graphics, mapping,
 visualization, and general meshing applications these differences are
 negligible. Use an adaptive-exact triangulator when the precise Delaunay edge
-set of the source floats is a requirement.
+set of the source coordinates is a requirement.
 
 ## Common output behavior
 
@@ -348,8 +399,8 @@ points are valid input and return an empty triangle vector because no
 two-dimensional faces exist.
 
 Do not assume that every input point appears in a returned triangle: duplicates
-or float points that collide on the quantization grid can be omitted in favor
-of their representative.
+or floating-point values that collide on the quantization grid can be omitted
+in favor of their representative.
 
 For cocircular input, more than one Delaunay triangulation can be valid. Compare
 meshes geometrically rather than assuming that another implementation must
@@ -362,6 +413,8 @@ The triangulation functions throw `std::invalid_argument` when:
 - fewer than three input points are supplied;
 - fewer than three unique integer or quantized coordinates remain;
 - a float coordinate is NaN or infinite;
+- quantization options are invalid, exceed an error limit, reject a collision,
+  or map outside the supported integer domain;
 - integer coordinate spans exceed the certified predicate range;
 - the input count exceeds the internal index or edge-arena range.
 

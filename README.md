@@ -26,7 +26,8 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Triangle indices referencing the original input, counterclockwise on the
   triangulation grid
 - Opt-in halfedge adjacency, convex hull, and duplicate representative mapping
-- Uniform float quantization with an optional precision and collision report
+- Automatic, fixed-step, or fixed-scale float quantization with
+  precision limits and collision policies
 - MIT licensed and dependency-free for normal library use
 
 ## Documentation
@@ -48,15 +49,15 @@ maps, graphics, and projected spatial datasets.
 
 Direct float input is practical for most graphics, mapping, visualization, and
 general meshing applications where exact edge topology is not required.
-`triangulate_float()` accepts the points directly, keeps their coordinates
-untouched, and returns indices into the original input. Only the edge decisions
-use internally quantized integer coordinates.
+`triangulate_float()` keeps source coordinates untouched and returns indices
+into the original input. Only the edge decisions use internally quantized
+integer coordinates.
 
 The resulting mesh will normally be very close to one computed directly from
-the source floats, but its edges are not guaranteed to be identical.
+the source values, but its edges are not guaranteed to be identical.
 Differences are most likely for nearly coincident, collinear, or cocircular
 points. Use an adaptive-exact triangulator when the precise Delaunay topology
-of the original float coordinates is required.
+of the original floating-point coordinates is required.
 
 ## Performance
 
@@ -196,7 +197,7 @@ int main() {
 }
 ```
 
-### Float input
+### Floating-point input
 
 Pass finite float coordinates directly as `FloatPoint` values. No manual
 conversion or quantization is required:
@@ -225,10 +226,22 @@ Use `triangulate_float_full(points)` when quantization details, adjacency, the
 convex hull, or representative mappings are needed. Its `quantization` field
 reports the grid step, measured coordinate error, and point collisions.
 
+`QuantizationOptions` can provide a stable mapping across separate batches:
+
+```cpp
+delaunay32::QuantizationOptions options;
+options.mode = delaunay32::QuantizationMode::FixedScale;
+options.origin_x = 0.0;
+options.origin_y = 0.0;
+options.scale = 1000.0;
+
+const auto triangles = triangulator.triangulate_float(points, options);
+```
+
 The returned vertices retain their original precision. The connectivity is
 computed on the internal integer grid, so edge choices can differ from an exact
-Delaunay triangulation of the original floats, particularly near geometric
-degeneracies.
+Delaunay triangulation of the original floating-point values, particularly near
+geometric degeneracies.
 
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
@@ -248,9 +261,9 @@ const delaunay32::TriangulationResult result =
 // result.representatives input index -> retained representative index
 ```
 
-The result also reports the predicate width and actual thread count. Float
-results include their `QuantizationReport`. The triangle-only APIs do not
-construct any of the additional fields.
+The result also reports the predicate width and actual thread count.
+Floating-point results include their `QuantizationReport`. The triangle-only
+APIs do not construct any of the additional fields.
 
 The [usage guide](docs/usage.md) gives the exact integer span limits, explains
 every `QuantizationReport` field, lists all overloads and exceptions, and covers
@@ -385,7 +398,7 @@ branches. See the [release process](docs/releasing.md) for the checklist.
 Included:
 
 - signed 32-bit integer coordinates
-- finite float coordinates through automatic uniform quantization
+- finite float coordinates through configurable uniform quantization
 - exact certified predicates
 - deterministic duplicate handling
 - serial and shared-memory parallel construction

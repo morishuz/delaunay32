@@ -137,85 +137,101 @@ void Triangulator::export_full_result_parallel(
 
     // Count faces, allocate exact output sizes, export faces and the dense
     // dart map, then resolve opposite darts after every worker has published
-    // its map entries. The scans are contiguous and avoid temporary nodes.
+    // its map entries. An abortable barrier makes resize failure phase-safe.
     const auto run = [&](std::size_t worker_index) {
-        const std::size_t first_range =
-            edge_ranges_.size() * worker_index / worker_count;
-        const std::size_t last_range =
-            edge_ranges_.size() * (worker_index + 1) / worker_count;
+        try {
+            const std::size_t first_range =
+                edge_ranges_.size() * worker_index / worker_count;
+            const std::size_t last_range =
+                edge_ranges_.size() * (worker_index + 1) / worker_count;
 
-        std::size_t count = 0;
-        for (std::size_t index = first_range; index < last_range; ++index) {
-            const EdgeRange range = edge_ranges_[index];
-            for (std::uint32_t start = range.first;
-                 start < range.last;
-                 ++start) {
-                std::uint32_t second = 0;
-                std::uint32_t third = 0;
-                if (find_export_face(start, second, third)) {
-                    ++count;
+            std::size_t count = 0;
+            for (std::size_t index = first_range;
+                 index < last_range;
+                 ++index) {
+                const EdgeRange range = edge_ranges_[index];
+                for (std::uint32_t start = range.first;
+                     start < range.last;
+                     ++start) {
+                    std::uint32_t second = 0;
+                    std::uint32_t third = 0;
+                    if (find_export_face(start, second, third)) {
+                        ++count;
+                    }
                 }
             }
-        }
-        counts[worker_index] = count;
+            counts[worker_index] = count;
 
-        barrier.wait();
-        if (worker_index == 0) {
-            for (std::size_t i = 0; i < worker_count; ++i) {
-                offsets[i + 1] = offsets[i] + counts[i];
+            if (!barrier.wait()) {
+                return;
             }
-            triangles_out_.resize(offsets.back());
-            halfedges_out_.resize(
-                checked_flat_edge_count(offsets.back()));
-        }
-
-        barrier.wait();
-        std::size_t triangle_index = offsets[worker_index];
-        for (std::size_t index = first_range; index < last_range; ++index) {
-            const EdgeRange range = edge_ranges_[index];
-            for (std::uint32_t start = range.first;
-                 start < range.last;
-                 ++start) {
-                std::uint32_t second = 0;
-                std::uint32_t third = 0;
-                if (!find_export_face(start, second, third)) {
-                    continue;
+            if (worker_index == 0) {
+                for (std::size_t i = 0; i < worker_count; ++i) {
+                    offsets[i + 1] = offsets[i] + counts[i];
                 }
-                const std::size_t flat_edge = triangle_index * 3;
-                triangles_out_[triangle_index] = {
-                    points_[org(start)].original,
-                    points_[org(second)].original,
-                    points_[org(third)].original,
-                };
-                edge_next_[start] =
-                    static_cast<std::uint32_t>(flat_edge);
-                edge_next_[second] =
-                    static_cast<std::uint32_t>(flat_edge + 1);
-                edge_next_[third] =
-                    static_cast<std::uint32_t>(flat_edge + 2);
-                ++triangle_index;
+                triangles_out_.resize(offsets.back());
+                halfedges_out_.resize(
+                    checked_flat_edge_count(offsets.back()));
             }
-        }
 
-        barrier.wait();
-        for (std::size_t index = first_range; index < last_range; ++index) {
-            const EdgeRange range = edge_ranges_[index];
-            for (std::uint32_t dart = range.first;
-                 dart < range.last;
-                 ++dart) {
-                if ((edge_origin_[dart] & kVisitedBit) != 0) {
-                    continue;
-                }
-                const std::uint32_t flat_edge = edge_next_[dart];
-                const std::uint32_t opposite = edge_next_[sym(dart)];
-                halfedges_out_[flat_edge] =
-                    opposite == kDeletedEdge
-                        ? -1
-                        : static_cast<std::int64_t>(opposite);
+            if (!barrier.wait()) {
+                return;
             }
+            std::size_t triangle_index = offsets[worker_index];
+            for (std::size_t index = first_range;
+                 index < last_range;
+                 ++index) {
+                const EdgeRange range = edge_ranges_[index];
+                for (std::uint32_t start = range.first;
+                     start < range.last;
+                     ++start) {
+                    std::uint32_t second = 0;
+                    std::uint32_t third = 0;
+                    if (!find_export_face(start, second, third)) {
+                        continue;
+                    }
+                    const std::size_t flat_edge = triangle_index * 3;
+                    triangles_out_[triangle_index] = {
+                        points_[org(start)].original,
+                        points_[org(second)].original,
+                        points_[org(third)].original,
+                    };
+                    edge_next_[start] =
+                        static_cast<std::uint32_t>(flat_edge);
+                    edge_next_[second] =
+                        static_cast<std::uint32_t>(flat_edge + 1);
+                    edge_next_[third] =
+                        static_cast<std::uint32_t>(flat_edge + 2);
+                    ++triangle_index;
+                }
+            }
+
+            if (!barrier.wait()) {
+                return;
+            }
+            for (std::size_t index = first_range;
+                 index < last_range;
+                 ++index) {
+                const EdgeRange range = edge_ranges_[index];
+                for (std::uint32_t dart = range.first;
+                     dart < range.last;
+                     ++dart) {
+                    if ((edge_origin_[dart] & kVisitedBit) != 0) {
+                        continue;
+                    }
+                    const std::uint32_t flat_edge = edge_next_[dart];
+                    const std::uint32_t opposite = edge_next_[sym(dart)];
+                    halfedges_out_[flat_edge] =
+                        opposite == kDeletedEdge
+                            ? -1
+                            : static_cast<std::int64_t>(opposite);
+                }
+            }
+        } catch (...) {
+            barrier.abort();
+            throw;
         }
     };
-
     workers.run(worker_count, run);
     export_hull();
 }
