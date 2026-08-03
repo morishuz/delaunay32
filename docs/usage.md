@@ -479,11 +479,22 @@ standard library exceptions.
   generates float points, requests a quantization report, and writes the mesh
   using the original float coordinates.
 - [`delaunay_svg_example.cpp`](../examples/delaunay_svg_example.cpp) accepts
-  integer CSV input or generates random integer points and writes an SVG.
+  integer JSON input or generates random integer points and writes an SVG.
+- [`delaunay_constrained_example.cpp`](../examples/delaunay_constrained_example.cpp)
+  loads a fixed JSON point/constraint set and writes ordinary and constrained
+  meshes side by side.
 
-Build both examples with:
+Build all examples with:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target delaunay_float_example delaunay_svg_example
+cmake --build build --target \
+  delaunay_float_example \
+  delaunay_svg_example \
+  delaunay_constrained_example
 ```
+
+The example JSON schema stores points as `[x, y]`, constraints as endpoint-index
+pairs, and reserves `polygon.outer` plus `polygon.holes` for polygon-domain
+examples. The parser belongs only to the examples; the installed library has no
+JSON dependency.

@@ -11,6 +11,9 @@ Notable changes to Delaunay32 are documented here. The project follows
   constrained Delaunay triangulation of integer point sets with noncrossing
   segments, collinear segment chains, duplicate representatives, and
   constraints meeting at existing sites.
+- A fixed constrained-triangulation comparison example and an extensible,
+  dependency-free example JSON schema for points, constraints, and future
+  polygon rings. Existing CSV example fixtures now use JSON.
 
 ## 0.4.0 - 2026-08-03
 

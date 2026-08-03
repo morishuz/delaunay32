@@ -38,7 +38,9 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - [Changelog](CHANGELOG.md): release notes and breaking API changes
 - [Float SVG example](examples/delaunay_float_example.cpp): end-to-end float
   input with a `QuantizationReport`
-- [Integer SVG example](examples/delaunay_svg_example.cpp): generated or CSV
+- [Constrained SVG example](examples/delaunay_constrained_example.cpp):
+  ordinary and constrained triangulations of the same fixed geometry
+- [Integer SVG example](examples/delaunay_svg_example.cpp): generated or JSON
   integer input
 
 ## When to use it
@@ -371,17 +373,35 @@ The example keeps its point count, seed, and rectangular float bounds as named
 constants near the top of `examples/delaunay_float_example.cpp`, making them
 easy to change while keeping the API flow uncluttered.
 
-### Integer points and CSV input
+### Constrained integer comparison
+
+The constrained example loads a fixed geometry, computes both ordinary and
+constrained Delaunay triangulations, and writes them side by side. Requested
+segments are dashed over the ordinary mesh and solid over the recovered mesh.
+The fixture includes segments that pass through and meet at existing points.
+
+![Ordinary Delaunay triangulation beside the constrained result, with requested segments highlighted in red](images/delaunay32_constrained.svg)
+
+```sh
+cmake --build build-debug --target delaunay_constrained_example --parallel
+./build-debug/delaunay_constrained_example \
+  examples/data/constrained.json constrained.svg
+```
+
+The example code is in
+[`delaunay_constrained_example.cpp`](examples/delaunay_constrained_example.cpp),
+and its editable point set is
+[`constrained.json`](examples/data/constrained.json).
+
+### Integer points and JSON input
 
 The dependency-free example accepts arbitrary signed integer points from a
-two-column CSV file:
+JSON geometry file:
 
-```csv
-x,y
-0,0
-500,0
-1000,0
-500,500
+```json
+{
+  "points": [[0, 0], [500, 0], [1000, 0], [500, 500]]
+}
 ```
 
 It reads the points exactly as supplied and scales the SVG to the input bounds
@@ -389,20 +409,37 @@ while preserving its aspect ratio.
 
 ```sh
 ./build/delaunay_svg_example \
-  --input examples/data/delaunay32.csv \
+  --input examples/data/delaunay32.json \
   --output delaunay32.svg
 ```
 
-With no CSV input, the original random mode remains available:
+With no JSON input, the original random mode remains available:
 
 ```sh
 ./build/delaunay_svg_example 100000 mesh.svg 42
 ```
 
 Random mode generates unique interior points and inserts the four square
-corners. Its point count includes those corners. In CSV mode, the file must
+corners. Its point count includes those corners. In JSON mode, the file must
 contain every desired point, including any boundary and corner points; the
 example does not add or remove points.
+
+The example-only JSON schema also accepts optional topology without adding a
+JSON dependency to the library:
+
+```json
+{
+  "points": [[0, 0], [100, 0], [100, 100], [0, 100]],
+  "constraints": [[0, 2]],
+  "polygon": {
+    "outer": [0, 1, 2, 3],
+    "holes": []
+  }
+}
+```
+
+`constraints` drives the constrained example. `polygon` is reserved for the
+planned polygon-domain example; its rings contain indices into `points`.
 
 ## Development
 

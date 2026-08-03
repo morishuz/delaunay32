@@ -70,6 +70,8 @@ if(DELAUNAY32_BUILD_EXAMPLES)
     add_executable(
         delaunay_svg_example
         examples/delaunay_svg_example.cpp
+        examples/geometry_io.cpp
+        examples/geometry_io.hpp
         examples/svg_io.cpp
         examples/svg_io.hpp
     )
@@ -86,6 +88,18 @@ if(DELAUNAY32_BUILD_EXAMPLES)
     target_link_libraries(
         delaunay_float_example PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_float_example)
+
+    add_executable(
+        delaunay_constrained_example
+        examples/delaunay_constrained_example.cpp
+        examples/geometry_io.cpp
+        examples/geometry_io.hpp
+        examples/svg_io.cpp
+        examples/svg_io.hpp
+    )
+    target_link_libraries(
+        delaunay_constrained_example PRIVATE delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay_constrained_example)
 endif()
 
 set(DELAUNATOR_HEADER
@@ -186,19 +200,24 @@ if(DELAUNAY32_BUILD_TESTS)
             COMMAND delaunay_svg_example 100
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-smoke.svg" 42)
         add_test(
-            NAME svg_example_csv
+            NAME svg_example_json
             COMMAND delaunay_svg_example
                     --input
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_points.csv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_points.json"
                     --output
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-csv-smoke.svg")
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-json-smoke.svg")
         add_test(
-            NAME svg_example_csv_collinear
+            NAME svg_example_json_collinear
             COMMAND delaunay_svg_example
                     --input
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_collinear.csv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_collinear.json"
                     --output
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-collinear-smoke.svg")
+        add_test(
+            NAME constrained_svg_example
+            COMMAND delaunay_constrained_example
+                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/constrained.json"
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-constrained-smoke.svg")
         add_test(
             NAME float_svg_example
             COMMAND delaunay_float_example

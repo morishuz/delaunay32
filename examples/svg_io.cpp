@@ -5,16 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <cstdint>
-#include <exception>
 #include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace delaunay32_example {
@@ -23,7 +18,6 @@ namespace {
 using delaunay32::Point;
 using delaunay32::Triangle;
 
-constexpr std::int32_t kDomainMaximum = 999;
 constexpr double kMaximumCanvasSize = 1200.0;
 constexpr double kMinimumCanvasWidth = 480.0;
 constexpr double kHeaderHeight = 56.0;
@@ -32,161 +26,6 @@ constexpr double kMaximumPlotWidth =
     kMaximumCanvasSize - 2.0 * kPlotMargin;
 constexpr double kMaximumPlotHeight =
     kMaximumCanvasSize - kHeaderHeight - 2.0 * kPlotMargin;
-constexpr std::size_t kInteriorCapacity =
-    static_cast<std::size_t>(kDomainMaximum - 1) *
-    static_cast<std::size_t>(kDomainMaximum - 1);
-constexpr std::size_t kMaximumPoints = kInteriorCapacity + 4;
-
-std::uint64_t point_key(const Point& point) {
-    return (static_cast<std::uint64_t>(
-                static_cast<std::uint32_t>(point.x))
-            << 32U) |
-           static_cast<std::uint32_t>(point.y);
-}
-
-std::vector<Point> generate_points(
-    std::size_t point_count,
-    std::uint64_t seed) {
-    if (point_count < 4 || point_count > kMaximumPoints) {
-        throw std::invalid_argument(
-            "point count must be between 4 and " +
-            std::to_string(kMaximumPoints));
-    }
-
-    std::vector<Point> points = {
-        {0, 0},
-        {kDomainMaximum, 0},
-        {kDomainMaximum, kDomainMaximum},
-        {0, kDomainMaximum},
-    };
-    points.reserve(point_count);
-
-    std::unordered_set<std::uint64_t> occupied;
-    occupied.reserve(point_count * 2);
-    for (const Point& point : points) {
-        occupied.insert(point_key(point));
-    }
-
-    std::mt19937_64 random(seed);
-    std::uniform_int_distribution<std::int32_t> coordinate(
-        1, kDomainMaximum - 1);
-    while (points.size() < point_count) {
-        const Point point = {coordinate(random), coordinate(random)};
-        if (occupied.insert(point_key(point)).second) {
-            points.push_back(point);
-        }
-    }
-    return points;
-}
-
-std::string trim(const std::string& text) {
-    const std::size_t first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) {
-        return {};
-    }
-    const std::size_t last = text.find_last_not_of(" \t\r\n");
-    return text.substr(first, last - first + 1);
-}
-
-std::int32_t parse_coordinate(
-    const std::string& value,
-    const std::string& input_path,
-    std::size_t line_number) {
-    const std::string text = trim(value);
-    std::size_t consumed = 0;
-    long long parsed = 0;
-    try {
-        parsed = std::stoll(text, &consumed);
-    } catch (const std::exception&) {
-        throw std::invalid_argument(
-            input_path + ":" + std::to_string(line_number) +
-            ": coordinate is not a signed 32-bit integer");
-    }
-    if (consumed != text.size() ||
-        parsed < std::numeric_limits<std::int32_t>::min() ||
-        parsed > std::numeric_limits<std::int32_t>::max()) {
-        throw std::invalid_argument(
-            input_path + ":" + std::to_string(line_number) +
-            ": coordinate is not a signed 32-bit integer");
-    }
-    return static_cast<std::int32_t>(parsed);
-}
-
-std::vector<Point> read_csv(const std::string& input_path) {
-    std::ifstream input(input_path);
-    if (!input) {
-        throw std::runtime_error("could not open CSV: " + input_path);
-    }
-
-    std::vector<Point> points;
-    std::string line;
-    std::size_t line_number = 0;
-    bool first_record = true;
-    while (std::getline(input, line)) {
-        ++line_number;
-        const std::string record = trim(line);
-        if (record.empty() || record[0] == '#') {
-            continue;
-        }
-
-        const std::size_t comma = record.find(',');
-        if (comma == std::string::npos ||
-            record.find(',', comma + 1) != std::string::npos) {
-            throw std::invalid_argument(
-                input_path + ":" + std::to_string(line_number) +
-                ": expected exactly two comma-separated fields");
-        }
-
-        const std::string x_text = trim(record.substr(0, comma));
-        const std::string y_text = trim(record.substr(comma + 1));
-        if (first_record && x_text == "x" && y_text == "y") {
-            first_record = false;
-            continue;
-        }
-        first_record = false;
-        points.push_back({
-            parse_coordinate(x_text, input_path, line_number),
-            parse_coordinate(y_text, input_path, line_number),
-        });
-    }
-    if (!input.eof()) {
-        throw std::runtime_error("failed while reading CSV: " + input_path);
-    }
-    if (points.size() < 3) {
-        throw std::invalid_argument(
-            input_path + ": expected at least three point records");
-    }
-    if (points.size() >
-        static_cast<std::size_t>(
-            std::numeric_limits<std::uint32_t>::max() >> 1U)) {
-        throw std::invalid_argument(input_path + ": too many point records");
-    }
-    return points;
-}
-
-std::size_t parse_point_count(const char* value) {
-    std::size_t consumed = 0;
-    const std::string text = value;
-    const unsigned long long parsed = std::stoull(text, &consumed);
-    if (consumed != text.size()) {
-        throw std::invalid_argument("point count is not an integer");
-    }
-    if (parsed > std::numeric_limits<std::size_t>::max()) {
-        throw std::invalid_argument("point count is too large");
-    }
-    return static_cast<std::size_t>(parsed);
-}
-
-std::uint64_t parse_seed(const char* value) {
-    std::size_t consumed = 0;
-    const std::string text = value;
-    const std::uint64_t seed = std::stoull(text, &consumed);
-    if (consumed != text.size()) {
-        throw std::invalid_argument("seed is not an integer");
-    }
-    return seed;
-}
-
 template <typename PointType>
 struct SvgTransform {
     double min_x = 0.0;
@@ -238,62 +77,16 @@ struct SvgTransform {
     }
 };
 
-template <typename PointType>
+template <typename PointType, typename Transform>
 void write_point(
     std::ostream& output,
     const PointType& point,
-    const SvgTransform<PointType>& transform) {
+    const Transform& transform) {
     output << std::fixed << std::setprecision(2)
            << transform.x(point.x) << ',' << transform.y(point.y);
 }
 
 }  // namespace
-
-Options parse_options(int argc, char** argv) {
-    Options options;
-    if (argc >= 2 && std::string(argv[1]) == "--input") {
-        options.csv_mode = true;
-        for (int i = 1; i < argc; ++i) {
-            const std::string argument = argv[i];
-            if (argument == "--input" && i + 1 < argc) {
-                options.input_path = argv[++i];
-            } else if (argument == "--output" && i + 1 < argc) {
-                options.output_path = argv[++i];
-            } else {
-                throw std::invalid_argument(
-                    "unknown or incomplete option: " + argument);
-            }
-        }
-        if (options.input_path.empty()) {
-            throw std::invalid_argument("--input requires a CSV path");
-        }
-        return options;
-    }
-
-    if (argc > 4) {
-        throw std::invalid_argument("too many positional arguments");
-    }
-    options.point_count =
-        argc >= 2 ? parse_point_count(argv[1]) : 1000;
-    options.output_path = argc >= 3 ? argv[2] : "mesh.svg";
-    options.seed = argc >= 4 ? parse_seed(argv[3]) : 1;
-    return options;
-}
-
-void print_usage(const char* executable) {
-    std::cerr
-        << "Usage:\n"
-        << "  " << executable
-        << " [point-count] [output.svg] [seed]\n"
-        << "  " << executable
-        << " --input points.csv [--output output.svg]\n";
-}
-
-std::vector<Point> load_points(const Options& options) {
-    return options.csv_mode
-               ? read_csv(options.input_path)
-               : generate_points(options.point_count, options.seed);
-}
 
 template <typename PointType>
 void write_svg_impl(
@@ -384,6 +177,207 @@ void write_svg(
     const std::vector<Triangle>& triangles,
     const delaunay32::QuantizationReport& report) {
     write_svg_impl(output_path, points, triangles, &report);
+}
+
+namespace {
+
+struct ComparisonTransform {
+    double min_x = 0.0;
+    double max_x = 0.0;
+    double min_y = 0.0;
+    double max_y = 0.0;
+    double scale = 1.0;
+    double left = 0.0;
+    double top = 0.0;
+
+    ComparisonTransform(
+        const std::vector<Point>& points,
+        double panel_left,
+        double panel_top,
+        double panel_width,
+        double panel_height) {
+        min_x = max_x = points[0].x;
+        min_y = max_y = points[0].y;
+        for (const Point& point : points) {
+            min_x = std::min(min_x, static_cast<double>(point.x));
+            max_x = std::max(max_x, static_cast<double>(point.x));
+            min_y = std::min(min_y, static_cast<double>(point.y));
+            max_y = std::max(max_y, static_cast<double>(point.y));
+        }
+        const double span_x = max_x - min_x;
+        const double span_y = max_y - min_y;
+        const double x_scale =
+            span_x == 0.0
+                ? std::numeric_limits<double>::max()
+                : panel_width / span_x;
+        const double y_scale =
+            span_y == 0.0
+                ? std::numeric_limits<double>::max()
+                : panel_height / span_y;
+        scale = std::min(x_scale, y_scale);
+        const double plot_width = span_x * scale;
+        const double plot_height = span_y * scale;
+        left = panel_left + (panel_width - plot_width) / 2.0;
+        top = panel_top + (panel_height - plot_height) / 2.0;
+    }
+
+    double x(double value) const {
+        return left + (value - min_x) * scale;
+    }
+
+    double y(double value) const {
+        return top + (max_y - value) * scale;
+    }
+};
+
+void write_comparison_panel(
+    std::ostream& output,
+    const std::vector<Point>& points,
+    const std::vector<delaunay32::Constraint>& constraints,
+    const std::vector<Triangle>& triangles,
+    const ComparisonTransform& transform,
+    double panel_left,
+    const char* title,
+    const char* subtitle,
+    bool constrained) {
+    static constexpr std::array<const char*, 6> colors = {
+        "#dcefe8",
+        "#dbe8f4",
+        "#f3e3a6",
+        "#e8dff0",
+        "#cde8ee",
+        "#f1d9cf",
+    };
+
+    output
+        << "<rect x=\"" << panel_left
+        << "\" y=\"92\" width=\"596\" height=\"636\" rx=\"14\" "
+           "fill=\"#ffffff\" stroke=\"#d7dddf\"/>\n"
+        << "<text x=\"" << panel_left + 24.0
+        << "\" y=\"126\" font-family=\"system-ui, sans-serif\" "
+           "font-size=\"20\" font-weight=\"650\" fill=\"#202426\">"
+        << title << "</text>\n"
+        << "<text x=\"" << panel_left + 24.0
+        << "\" y=\"149\" font-family=\"system-ui, sans-serif\" "
+           "font-size=\"13\" fill=\"#647075\">"
+        << subtitle << "</text>\n";
+
+    for (const Triangle& triangle : triangles) {
+        const std::size_t color =
+            (static_cast<std::size_t>(triangle.i0) * 17 +
+             static_cast<std::size_t>(triangle.i1) * 31 +
+             static_cast<std::size_t>(triangle.i2) * 43) %
+            colors.size();
+        output << "<polygon fill=\""
+               << (constrained ? colors[color] : "#edf1f2")
+               << "\" stroke=\"#536166\" stroke-width=\"0.8\" "
+                  "stroke-linejoin=\"round\" points=\"";
+        write_point(output, points[triangle.i0], transform);
+        output << ' ';
+        write_point(output, points[triangle.i1], transform);
+        output << ' ';
+        write_point(output, points[triangle.i2], transform);
+        output << "\"/>\n";
+    }
+
+    for (const delaunay32::Constraint constraint : constraints) {
+        const Point& a = points[constraint.i0];
+        const Point& b = points[constraint.i1];
+        output << "<line x1=\"" << std::fixed << std::setprecision(2)
+               << transform.x(a.x) << "\" y1=\"" << transform.y(a.y)
+               << "\" x2=\"" << transform.x(b.x) << "\" y2=\""
+               << transform.y(b.y) << "\" stroke=\"#e0442e\" "
+               << "stroke-width=\"" << (constrained ? 4.6 : 3.0)
+               << "\" stroke-linecap=\"round\" opacity=\""
+               << (constrained ? 0.96 : 0.58) << "\"";
+        if (!constrained) {
+            output << " stroke-dasharray=\"9 7\"";
+        }
+        output << "/>\n";
+    }
+
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point& point = points[i];
+        const double x = transform.x(point.x);
+        const double y = transform.y(point.y);
+        output << "<circle cx=\"" << x << "\" cy=\"" << y
+               << "\" r=\"3.4\" fill=\"#111719\" stroke=\"#ffffff\" "
+                  "stroke-width=\"1.2\"/>\n"
+               << "<text x=\"" << x + 5.0 << "\" y=\"" << y - 5.0
+               << "\" font-family=\"ui-monospace, monospace\" "
+                  "font-size=\"10\" fill=\"#30383b\">"
+               << i << "</text>\n";
+    }
+}
+
+}  // namespace
+
+void write_constrained_comparison_svg(
+    const std::string& output_path,
+    const std::vector<Point>& points,
+    const std::vector<delaunay32::Constraint>& constraints,
+    const std::vector<Triangle>& ordinary_triangles,
+    const std::vector<Triangle>& constrained_triangles) {
+    constexpr double canvas_width = 1280.0;
+    constexpr double canvas_height = 760.0;
+    constexpr double left_panel = 24.0;
+    constexpr double right_panel = 660.0;
+    constexpr double plot_top = 172.0;
+    constexpr double plot_width = 540.0;
+    constexpr double plot_height = 520.0;
+
+    std::ofstream output(output_path);
+    if (!output) {
+        throw std::runtime_error("could not create SVG: " + output_path);
+    }
+    const ComparisonTransform ordinary_transform(
+        points, left_panel + 28.0, plot_top, plot_width, plot_height);
+    const ComparisonTransform constrained_transform(
+        points, right_panel + 28.0, plot_top, plot_width, plot_height);
+
+    output
+        << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+        << canvas_width << "\" height=\"" << canvas_height
+        << "\" viewBox=\"0 0 " << canvas_width << ' ' << canvas_height
+        << "\">\n"
+        << "<rect width=\"100%\" height=\"100%\" fill=\"#f4f6f5\"/>\n"
+        << "<text x=\"24\" y=\"38\" "
+           "font-family=\"system-ui, sans-serif\" font-size=\"24\" "
+           "font-weight=\"700\" fill=\"#172023\">"
+           "Delaunay32 constrained triangulation</text>\n"
+        << "<text x=\"24\" y=\"65\" "
+           "font-family=\"system-ui, sans-serif\" font-size=\"14\" "
+           "fill=\"#566267\">"
+        << points.size() << " points · " << constraints.size()
+        << " requested segments · red lines show the same constraints in "
+           "both panels</text>\n";
+
+    write_comparison_panel(
+        output,
+        points,
+        constraints,
+        ordinary_triangles,
+        ordinary_transform,
+        left_panel,
+        "Ordinary Delaunay",
+        "Dashed requests may cut across existing triangle edges",
+        false);
+    write_comparison_panel(
+        output,
+        points,
+        constraints,
+        constrained_triangles,
+        constrained_transform,
+        right_panel,
+        "Constrained Delaunay",
+        "Every solid request is a mesh edge or edge chain",
+        true);
+    output << "</svg>\n";
+    if (!output) {
+        throw std::runtime_error(
+            "failed while writing SVG: " + output_path);
+    }
 }
 
 }  // namespace delaunay32_example
