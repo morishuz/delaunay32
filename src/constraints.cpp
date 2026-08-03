@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: MIT
+
+#include "delaunay32/delaunay.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace delaunay32 {
+namespace {
+
+bool opposite_nonzero_signs(std::int64_t a, std::int64_t b) {
+    return (a > 0 && b < 0) || (a < 0 && b > 0);
+}
+
+}  // namespace
+
+void Triangulator::build_constraint_indices(
+    const std::vector<std::uint32_t>& representatives,
+    std::size_t original_point_count) {
+    original_to_site_.assign(original_point_count, kDeletedEdge);
+    site_edge_.assign(points_.size(), kDeletedEdge);
+    std::uint32_t marker_count = 0;
+    for (const EdgeRange range : edge_ranges_) {
+        marker_count = std::max(marker_count, range.last);
+    }
+    // Keep constraint-only storage and initialization off the ordinary
+    // triangulation path.
+    edge_constrained_.assign(marker_count, 0);
+
+    for (std::size_t site = 0; site < points_.size(); ++site) {
+        original_to_site_[points_[site].original] =
+            static_cast<std::uint32_t>(site);
+    }
+    for (std::size_t original = 0;
+         original < original_point_count;
+         ++original) {
+        if (original_to_site_[original] != kDeletedEdge) {
+            continue;
+        }
+        const std::uint32_t representative = representatives[original];
+        original_to_site_[original] = original_to_site_[representative];
+    }
+
+    for (const EdgeRange range : edge_ranges_) {
+        for (std::uint32_t dart = range.first;
+             dart < range.last;
+             ++dart) {
+            if (!is_live_edge(dart)) {
+                continue;
+            }
+            site_edge_[org(dart)] = dart;
+        }
+    }
+    if (std::find(
+            site_edge_.begin(), site_edge_.end(), kDeletedEdge) !=
+        site_edge_.end()) {
+        throw std::logic_error(
+            "constructed topology contains an isolated site");
+    }
+}
+
+std::uint32_t Triangulator::find_edge(
+    std::uint32_t origin,
+    std::uint32_t destination) const {
+    const std::uint32_t start = site_edge_[origin];
+    if (start == kDeletedEdge || org(start) != origin) {
+        throw std::logic_error("invalid site-to-edge mapping");
+    }
+    std::uint32_t edge = start;
+    do {
+        if (dest(edge) == destination) {
+            return edge;
+        }
+        edge = onext(edge);
+    } while (edge != start);
+    return kDeletedEdge;
+}
+
+std::uint32_t Triangulator::first_collinear_edge(
+    std::uint32_t origin,
+    std::uint32_t destination) const {
+    const Site& a = points_[origin];
+    const Site& b = points_[destination];
+    const std::uint32_t start = site_edge_[origin];
+    std::uint32_t best = kDeletedEdge;
+    std::uint64_t best_distance =
+        std::numeric_limits<std::uint64_t>::max();
+    std::uint32_t edge = start;
+    do {
+        const std::uint32_t candidate = dest(edge);
+        if (candidate != destination &&
+            orient(origin, destination, candidate) == 0) {
+            const Site& p = points_[candidate];
+            const bool between =
+                p.x >= std::min(a.x, b.x) &&
+                p.x <= std::max(a.x, b.x) &&
+                p.y >= std::min(a.y, b.y) &&
+                p.y <= std::max(a.y, b.y) &&
+                (p.x != a.x || p.y != a.y);
+            if (between) {
+                const std::int64_t dx =
+                    static_cast<std::int64_t>(p.x) - a.x;
+                const std::int64_t dy =
+                    static_cast<std::int64_t>(p.y) - a.y;
+                const std::uint64_t ux = static_cast<std::uint64_t>(
+                    dx < 0 ? -dx : dx);
+                const std::uint64_t uy = static_cast<std::uint64_t>(
+                    dy < 0 ? -dy : dy);
+                const std::uint64_t distance = ux * ux + uy * uy;
+                if (distance < best_distance) {
+                    best = edge;
+                    best_distance = distance;
+                }
+            }
+        }
+        edge = onext(edge);
+    } while (edge != start);
+    return best;
+}
+
+bool Triangulator::properly_intersects(
+    std::uint32_t edge,
+    std::uint32_t a,
+    std::uint32_t b) const {
+    const std::uint32_t u = org(edge);
+    const std::uint32_t v = dest(edge);
+    return opposite_nonzero_signs(
+               orient(a, b, u), orient(a, b, v)) &&
+           opposite_nonzero_signs(
+               orient(u, v, a), orient(u, v, b));
+}
+
+std::vector<std::uint32_t> Triangulator::crossed_edges(
+    std::uint32_t a,
+    std::uint32_t b,
+    std::uint32_t& reached) const {
+    reached = b;
+    std::uint32_t crossed = kDeletedEdge;
+    const std::uint32_t start = site_edge_[a];
+    std::uint32_t outgoing = start;
+    do {
+        std::uint32_t opposite = 0;
+        if (left_face_opposite(outgoing, opposite)) {
+            const std::uint32_t candidate = lnext(outgoing);
+            if (properly_intersects(candidate, a, b)) {
+                crossed = candidate;
+                break;
+            }
+        }
+        outgoing = onext(outgoing);
+    } while (outgoing != start);
+    if (crossed == kDeletedEdge) {
+        throw std::logic_error(
+            "could not locate the first edge crossed by a constraint");
+    }
+
+    std::vector<std::uint32_t> result;
+    result.reserve(16);
+    std::size_t step_count = 0;
+    const std::size_t maximum_steps = points_.size() * 3;
+    while (true) {
+        result.push_back(crossed & ~1U);
+        const std::uint32_t entered = sym(crossed);
+        const std::uint32_t first = lnext(entered);
+        const std::uint32_t second = lnext(first);
+        const std::uint32_t third = dest(first);
+        if (third == b) {
+            return result;
+        }
+        if (orient(a, b, third) == 0) {
+            // An existing site on the requested segment becomes the endpoint
+            // of this recovery pass. The caller continues from it, producing
+            // a constraint chain without inserting a Steiner point.
+            reached = third;
+            return result;
+        }
+        if (properly_intersects(first, a, b)) {
+            crossed = first;
+        } else if (properly_intersects(second, a, b)) {
+            crossed = second;
+        } else {
+            throw std::logic_error(
+                "constraint walk did not leave the current triangle");
+        }
+        ++step_count;
+        if (step_count > maximum_steps) {
+            throw std::logic_error("constraint walk did not terminate");
+        }
+    }
+}
+
+void Triangulator::recover_constraint(
+    std::uint32_t a,
+    std::uint32_t b) {
+    while (a != b) {
+        const std::uint32_t existing = find_edge(a, b);
+        if (existing != kDeletedEdge) {
+            mark_constrained(existing);
+            return;
+        }
+
+        const std::uint32_t collinear = first_collinear_edge(a, b);
+        if (collinear != kDeletedEdge) {
+            mark_constrained(collinear);
+            a = dest(collinear);
+            continue;
+        }
+
+        std::uint32_t reached = b;
+        const std::vector<std::uint32_t> crossed =
+            crossed_edges(a, b, reached);
+        // A crossed diagonal can initially be nonflippable. Cycling those
+        // diagonals lets neighboring flips make their quadrilaterals convex.
+        std::deque<std::uint32_t> pending(
+            crossed.begin(), crossed.end());
+        std::size_t blocked = 0;
+        std::size_t flips = 0;
+        const std::size_t crossing_count = crossed.size();
+        const std::size_t maximum =
+            std::numeric_limits<std::size_t>::max();
+        const bool flip_bound_overflows =
+            crossing_count != 0 &&
+            crossing_count > (maximum - 64) / 8 / crossing_count;
+        const std::size_t maximum_flips = flip_bound_overflows
+                                              ? maximum
+                                              : 64 + crossing_count *
+                                                         crossing_count * 8;
+
+        while (!pending.empty()) {
+            const std::uint32_t edge = pending.front();
+            pending.pop_front();
+            if (!properly_intersects(edge, a, reached)) {
+                blocked = 0;
+                continue;
+            }
+            if (is_constrained(edge)) {
+                throw std::invalid_argument(
+                    "constraints intersect away from an existing site");
+            }
+            if (!can_flip(edge)) {
+                pending.push_back(edge);
+                ++blocked;
+                if (blocked >= pending.size()) {
+                    throw std::logic_error(
+                        "constraint recovery has no flippable crossed edge");
+                }
+                continue;
+            }
+
+            flip_edge(edge);
+            blocked = 0;
+            ++flips;
+            if (flips > maximum_flips) {
+                throw std::logic_error(
+                    "constraint recovery exceeded its flip bound");
+            }
+            if (properly_intersects(edge, a, reached)) {
+                pending.push_back(edge);
+            }
+        }
+
+        const std::uint32_t recovered = find_edge(a, reached);
+        if (recovered == kDeletedEdge) {
+            throw std::logic_error(
+                "constraint recovery did not create the requested edge");
+        }
+        mark_constrained(recovered);
+        a = reached;
+    }
+}
+
+void Triangulator::legalize_unconstrained_edges() {
+    // Lawson flips restore local Delaunay legality without ever removing a
+    // recovered segment. A strict in-circle test leaves cocircular choices
+    // deterministic.
+    std::vector<std::uint32_t> pending;
+    for (const EdgeRange range : edge_ranges_) {
+        for (std::uint32_t edge = range.first;
+             edge < range.last;
+             edge += 2) {
+            if (is_live_edge(edge) && !is_constrained(edge)) {
+                pending.push_back(edge);
+            }
+        }
+    }
+
+    while (!pending.empty()) {
+        const std::uint32_t edge = pending.back();
+        pending.pop_back();
+        if (!can_flip(edge)) {
+            continue;
+        }
+        std::uint32_t left = 0;
+        std::uint32_t right = 0;
+        if (!left_face_opposite(edge, left) ||
+            !left_face_opposite(sym(edge), right) ||
+            !active_in_circle(org(edge), dest(edge), left, right)) {
+            continue;
+        }
+
+        flip_edge(edge);
+        const std::uint32_t left_next = lnext(edge);
+        const std::uint32_t left_previous = lnext(left_next);
+        const std::uint32_t right_next = lnext(sym(edge));
+        const std::uint32_t right_previous = lnext(right_next);
+        pending.push_back(left_next & ~1U);
+        pending.push_back(left_previous & ~1U);
+        pending.push_back(right_next & ~1U);
+        pending.push_back(right_previous & ~1U);
+    }
+}
+
+void Triangulator::recover_constraints(
+    const std::vector<Constraint>& constraints) {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> normalized;
+    normalized.reserve(constraints.size());
+    for (const Constraint constraint : constraints) {
+        if (constraint.i0 >= original_to_site_.size() ||
+            constraint.i1 >= original_to_site_.size()) {
+            throw std::invalid_argument(
+                "constraint endpoint is outside the point array");
+        }
+        std::uint32_t a = original_to_site_[constraint.i0];
+        std::uint32_t b = original_to_site_[constraint.i1];
+        if (a == b) {
+            throw std::invalid_argument(
+                "constraint endpoints are coincident");
+        }
+        if (points_[b].original < points_[a].original) {
+            std::swap(a, b);
+        }
+        normalized.emplace_back(a, b);
+    }
+    std::sort(
+        normalized.begin(), normalized.end(),
+        [&](const auto& lhs, const auto& rhs) {
+            const auto lhs_key = std::pair<std::uint32_t, std::uint32_t>{
+                points_[lhs.first].original,
+                points_[lhs.second].original,
+            };
+            const auto rhs_key = std::pair<std::uint32_t, std::uint32_t>{
+                points_[rhs.first].original,
+                points_[rhs.second].original,
+            };
+            return lhs_key < rhs_key;
+        });
+    normalized.erase(
+        std::unique(normalized.begin(), normalized.end()),
+        normalized.end());
+    if (normalized.empty()) {
+        return;
+    }
+
+    for (const auto constraint : normalized) {
+        recover_constraint(constraint.first, constraint.second);
+    }
+    legalize_unconstrained_edges();
+}
+
+}  // namespace delaunay32

@@ -337,7 +337,45 @@ std::vector<Triangle> Triangulator::triangulate_int(
     const std::vector<Point>& points) {
     require_point_count(points.size());
     load_int_points(points);
-    triangulate_loaded_points();
+    build_loaded_topology();
+    if (active_thread_count_ > 1) {
+        export_triangles_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_triangles();
+    }
+    return std::move(triangles_out_);
+}
+
+std::vector<Triangle> Triangulator::triangulate_constrained_int(
+    const std::vector<Point>& points,
+    const std::vector<Constraint>& constraints) {
+    if (constraints.empty()) {
+        return triangulate_int(points);
+    }
+    require_point_count(points.size());
+    for (const Constraint constraint : constraints) {
+        if (constraint.i0 >= points.size() ||
+            constraint.i1 >= points.size()) {
+            throw std::invalid_argument(
+                "constraint endpoint is outside the point array");
+        }
+        if (constraint.i0 == constraint.i1) {
+            throw std::invalid_argument(
+                "constraint endpoints are coincident");
+        }
+    }
+    load_int_points(points);
+    std::vector<std::uint32_t> representatives;
+    build_loaded_topology(&representatives);
+    build_constraint_indices(representatives, points.size());
+    recover_constraints(constraints);
+    if (active_thread_count_ > 1) {
+        export_triangles_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_triangles();
+    }
     return std::move(triangles_out_);
 }
 
@@ -393,9 +431,15 @@ std::vector<Triangle> Triangulator::triangulate_float(
     const QuantizationOptions& options) {
     require_point_count(points.size());
     load_float_points(points, options, nullptr);
-    triangulate_loaded_points(
+    build_loaded_topology(
         nullptr,
         options.collision_policy == QuantizationCollisionPolicy::Reject);
+    if (active_thread_count_ > 1) {
+        export_triangles_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_triangles();
+    }
     return std::move(triangles_out_);
 }
 
@@ -405,7 +449,13 @@ TriangulationResult Triangulator::triangulate_int_full(
     load_int_points(points);
     std::vector<std::uint32_t> representatives;
     const PredicateWidth predicate_width =
-        triangulate_loaded_points(&representatives);
+        build_loaded_topology(&representatives);
+    if (active_thread_count_ > 1) {
+        export_full_result_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_full_result();
+    }
     return make_result(
         {}, predicate_width, std::move(representatives));
 }
@@ -418,9 +468,15 @@ TriangulationResult Triangulator::triangulate_float_full(
     load_float_points(points, options, &report);
     std::vector<std::uint32_t> representatives;
     const PredicateWidth predicate_width =
-        triangulate_loaded_points(
+        build_loaded_topology(
             &representatives,
             options.collision_policy == QuantizationCollisionPolicy::Reject);
+    if (active_thread_count_ > 1) {
+        export_full_result_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_full_result();
+    }
     report.unique_points = points_.size();
     report.collapsed_points = points.size() - points_.size();
     return make_result(
@@ -429,7 +485,7 @@ TriangulationResult Triangulator::triangulate_float_full(
         std::move(representatives));
 }
 
-PredicateWidth Triangulator::triangulate_loaded_points(
+PredicateWidth Triangulator::build_loaded_topology(
     std::vector<std::uint32_t>* representatives,
     bool reject_duplicates) {
     std::size_t point_count = points_.size();
@@ -634,17 +690,6 @@ PredicateWidth Triangulator::triangulate_loaded_points(
             {0, static_cast<std::uint32_t>(edge_count_)});
     }
     outer_seed_ = sym(hull.x.left_outer);
-    if (representatives != nullptr) {
-        if (active_thread_count_ > 1) {
-            export_full_result_parallel(active_thread_count_, *workers);
-        } else {
-            export_full_result();
-        }
-    } else if (active_thread_count_ > 1) {
-        export_triangles_parallel(active_thread_count_, *workers);
-    } else {
-        export_triangles();
-    }
     return predicate_width;
 }
 

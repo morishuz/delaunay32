@@ -47,6 +47,7 @@ function(delaunay32_enable_warnings target)
 endfunction()
 
 set(DELAUNAY32_LIBRARY_SOURCES
+    src/constraints.cpp
     src/delaunay.cpp
     src/export.cpp
     src/internal.hpp

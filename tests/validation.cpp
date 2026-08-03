@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,168 @@ std::uint32_t triangle_vertex(
             return triangle.i1;
         default:
             return triangle.i2;
+    }
+}
+
+bool mesh_has_edge(
+    const std::vector<Triangle>& triangles,
+    std::uint32_t a,
+    std::uint32_t b) {
+    for (const Triangle& triangle : triangles) {
+        const std::array<std::uint32_t, 3> vertices = {
+            triangle.i0,
+            triangle.i1,
+            triangle.i2,
+        };
+        for (std::size_t i = 0; i < vertices.size(); ++i) {
+            const std::uint32_t u = vertices[i];
+            const std::uint32_t v = vertices[(i + 1) % vertices.size()];
+            if ((u == a && v == b) || (u == b && v == a)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool point_on_segment(
+    const std::vector<Point>& points,
+    std::uint32_t point,
+    std::uint32_t a,
+    std::uint32_t b) {
+    if (benchmark_support::orient(
+            points[a], points[b], points[point]) != 0) {
+        return false;
+    }
+    return points[point].x >= std::min(points[a].x, points[b].x) &&
+           points[point].x <= std::max(points[a].x, points[b].x) &&
+           points[point].y >= std::min(points[a].y, points[b].y) &&
+           points[point].y <= std::max(points[a].y, points[b].y);
+}
+
+bool segments_properly_intersect(
+    const Point& a,
+    const Point& b,
+    const Point& c,
+    const Point& d) {
+    const auto ab_c = benchmark_support::orient(a, b, c);
+    const auto ab_d = benchmark_support::orient(a, b, d);
+    const auto cd_a = benchmark_support::orient(c, d, a);
+    const auto cd_b = benchmark_support::orient(c, d, b);
+    const auto opposite = [](const auto& lhs, const auto& rhs) {
+        return (lhs > 0 && rhs < 0) || (lhs < 0 && rhs > 0);
+    };
+    return opposite(ab_c, ab_d) && opposite(cd_a, cd_b);
+}
+
+void require_valid_constrained_mesh(
+    const std::vector<Point>& points,
+    const std::vector<Triangle>& triangles,
+    const std::vector<Constraint>& constraints,
+    const std::string& label) {
+    struct Record {
+        std::uint32_t a = 0;
+        std::uint32_t b = 0;
+        std::uint32_t opposite = 0;
+        std::uint32_t neighbor_opposite = 0;
+        unsigned count = 0;
+    };
+    std::unordered_map<std::uint64_t, Record> edges;
+    edges.reserve(triangles.size() * 2);
+    std::vector<bool> used(points.size(), false);
+    const auto add_edge = [&](std::uint32_t a,
+                              std::uint32_t b,
+                              std::uint32_t opposite) {
+        const std::uint64_t key = benchmark_support::edge_key(a, b);
+        auto [iterator, inserted] =
+            edges.emplace(key, Record{a, b, opposite, 0, 1});
+        if (!inserted) {
+            require(
+                iterator->second.count == 1,
+                label + ": mesh contains a non-manifold edge");
+            iterator->second.neighbor_opposite = opposite;
+            iterator->second.count = 2;
+        }
+    };
+    for (const Triangle& triangle : triangles) {
+        require(
+            triangle.i0 < points.size() &&
+                triangle.i1 < points.size() &&
+                triangle.i2 < points.size(),
+            label + ": triangle index is outside the input");
+        require(
+            benchmark_support::orient(
+                points[triangle.i0],
+                points[triangle.i1],
+                points[triangle.i2]) > 0,
+            label + ": triangle is not counterclockwise");
+        used[triangle.i0] = true;
+        used[triangle.i1] = true;
+        used[triangle.i2] = true;
+        add_edge(triangle.i0, triangle.i1, triangle.i2);
+        add_edge(triangle.i1, triangle.i2, triangle.i0);
+        add_edge(triangle.i2, triangle.i0, triangle.i1);
+    }
+    require(
+        std::find(used.begin(), used.end(), false) == used.end(),
+        label + ": mesh does not reference every input point");
+
+    std::unordered_set<std::uint64_t> constrained_edges;
+    for (const Constraint constraint : constraints) {
+        require(
+            constraint.i0 < points.size() && constraint.i1 < points.size(),
+            label + ": test constraint endpoint is invalid");
+        std::vector<std::vector<std::uint32_t>> adjacency(points.size());
+        for (const auto& entry : edges) {
+            const Record& edge = entry.second;
+            if (point_on_segment(
+                    points, edge.a, constraint.i0, constraint.i1) &&
+                point_on_segment(
+                    points, edge.b, constraint.i0, constraint.i1)) {
+                adjacency[edge.a].push_back(edge.b);
+                adjacency[edge.b].push_back(edge.a);
+                constrained_edges.insert(entry.first);
+            } else {
+                require(
+                    !segments_properly_intersect(
+                        points[constraint.i0],
+                        points[constraint.i1],
+                        points[edge.a],
+                        points[edge.b]),
+                    label + ": mesh edge crosses a constraint");
+            }
+        }
+        std::vector<std::uint32_t> pending = {constraint.i0};
+        std::vector<bool> reached(points.size(), false);
+        reached[constraint.i0] = true;
+        while (!pending.empty()) {
+            const std::uint32_t vertex = pending.back();
+            pending.pop_back();
+            for (const std::uint32_t neighbor : adjacency[vertex]) {
+                if (!reached[neighbor]) {
+                    reached[neighbor] = true;
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        require(
+            reached[constraint.i1],
+            label + ": constraint is not represented by a mesh-edge chain");
+    }
+
+    for (const auto& entry : edges) {
+        const Record& edge = entry.second;
+        if (edge.count != 2 ||
+            constrained_edges.count(entry.first) != 0) {
+            continue;
+        }
+        require(
+            !benchmark_support::inside_circumcircle(
+                points[edge.a],
+                points[edge.b],
+                points[edge.opposite],
+                points[edge.neighbor_opposite]),
+            label + ": unconstrained edge is locally illegal");
     }
 }
 
@@ -720,6 +883,349 @@ void test_wide_predicates() {
 #endif
 }
 
+void test_single_constraint_recovery() {
+    const std::vector<Point> points = {
+        {0, 0},
+        {100, 0},
+        {100, 100},
+        {0, 100},
+    };
+    Triangulator triangulator;
+    const std::vector<Triangle> unconstrained =
+        triangulator.triangulate_int(points);
+    const Constraint missing = mesh_has_edge(unconstrained, 0, 2)
+                                   ? Constraint{1, 3}
+                                   : Constraint{0, 2};
+    const std::vector<Triangle> constrained =
+        triangulator.triangulate_constrained_int(points, {missing});
+    require_valid_constrained_mesh(
+        points, constrained, {missing}, "single constraint recovery");
+    require(
+        mesh_has_edge(constrained, missing.i0, missing.i1),
+        "single constraint was not recovered");
+}
+
+void test_constrained_random_cases() {
+    for (std::uint64_t seed = 0; seed < 300; ++seed) {
+        const std::size_t point_count = 20 + seed % 80;
+        const std::vector<Point> points =
+            benchmark_support::generate_points(
+                Dataset::Uniform, point_count, 0xCD7000ULL + seed, 2000);
+        const Constraint constraint = {
+            static_cast<std::uint32_t>(seed % point_count),
+            static_cast<std::uint32_t>(
+                (seed * 17 + point_count / 2) % point_count),
+        };
+        if (constraint.i0 == constraint.i1) {
+            continue;
+        }
+        Triangulator triangulator(seed % 2 == 0 ? 1 : 2);
+        const std::vector<Triangle> triangles =
+            triangulator.triangulate_constrained_int(
+                points, {constraint});
+        require_valid_constrained_mesh(
+            points,
+            triangles,
+            {constraint},
+            "random single-constraint case");
+    }
+}
+
+void test_multiple_constraints() {
+    const std::vector<Point> points =
+        benchmark_support::generate_points(
+            Dataset::Uniform, 80, 0xC07A1AULL, 5000);
+    std::vector<Constraint> constraints;
+    for (std::uint32_t vertex = 1; vertex < 16; ++vertex) {
+        constraints.push_back({0, vertex});
+    }
+    constraints.push_back(constraints[3]);
+    constraints.push_back({constraints[5].i1, constraints[5].i0});
+
+    Triangulator triangulator;
+    const std::vector<Triangle> triangles =
+        triangulator.triangulate_constrained_int(points, constraints);
+    require_valid_constrained_mesh(
+        points, triangles, constraints, "multiple constraints");
+}
+
+void test_collinear_constraint_chain() {
+    const std::vector<Point> points = {
+        {0, 0},
+        {10, 0},
+        {20, 0},
+        {30, 0},
+        {0, 20},
+        {30, 20},
+        {15, 10},
+    };
+    const std::vector<Constraint> constraints = {
+        {0, 3},
+        {1, 2},
+        {3, 0},
+    };
+    Triangulator triangulator;
+    const std::vector<Triangle> triangles =
+        triangulator.triangulate_constrained_int(points, constraints);
+    require_valid_constrained_mesh(
+        points, triangles, constraints, "collinear constraint chain");
+    require(mesh_has_edge(triangles, 0, 1), "constraint chain misses 0-1");
+    require(mesh_has_edge(triangles, 1, 2), "constraint chain misses 1-2");
+    require(mesh_has_edge(triangles, 2, 3), "constraint chain misses 2-3");
+}
+
+void test_constraint_cycle() {
+    constexpr std::size_t ring_size = 24;
+    constexpr double pi = 3.14159265358979323846;
+    std::vector<Point> points;
+    points.reserve(ring_size + 100);
+    for (std::size_t i = 0; i < ring_size; ++i) {
+        const double angle =
+            2.0 * pi * static_cast<double>(i) /
+            static_cast<double>(ring_size);
+        const double radius = i % 2 == 0 ? 900.0 : 450.0;
+        points.push_back({
+            static_cast<std::int32_t>(
+                std::llround(radius * std::cos(angle))),
+            static_cast<std::int32_t>(
+                std::llround(radius * std::sin(angle))),
+        });
+    }
+    std::vector<Point> background =
+        benchmark_support::generate_points(
+            Dataset::Uniform, 100, 0xC1C1EULL, 1800);
+    for (Point& point : background) {
+        point.x -= 900;
+        point.y -= 900;
+    }
+    points.insert(points.end(), background.begin(), background.end());
+
+    std::vector<Constraint> constraints;
+    constraints.reserve(ring_size);
+    for (std::uint32_t i = 0; i < ring_size; ++i) {
+        constraints.push_back({
+            i,
+            static_cast<std::uint32_t>((i + 1) % ring_size),
+        });
+    }
+    Triangulator triangulator;
+    const std::vector<Triangle> triangles =
+        triangulator.triangulate_constrained_int(points, constraints);
+    require_valid_constrained_mesh(
+        points, triangles, constraints, "nonconvex constraint cycle");
+}
+
+void test_constraint_split_at_unconnected_site() {
+    const std::vector<Point> points = {
+        {0, 0},
+        {10, 0},
+        {20, 0},
+        {5, 1},
+        {5, -1},
+        {15, 1},
+        {15, -1},
+        {-5, -10},
+        {25, -10},
+        {25, 10},
+        {-5, 10},
+    };
+    Triangulator triangulator;
+    const std::vector<Triangle> ordinary =
+        triangulator.triangulate_int(points);
+    require(
+        !mesh_has_edge(ordinary, 0, 1) &&
+            !mesh_has_edge(ordinary, 1, 2),
+        "split-site fixture unexpectedly starts with constraint subedges");
+
+    const std::vector<Constraint> constraints = {{0, 2}};
+    const std::vector<Triangle> constrained =
+        triangulator.triangulate_constrained_int(points, constraints);
+    require_valid_constrained_mesh(
+        points,
+        constrained,
+        constraints,
+        "constraint split at an initially unconnected site");
+    require(mesh_has_edge(constrained, 0, 1), "split recovery misses 0-1");
+    require(mesh_has_edge(constrained, 1, 2), "split recovery misses 1-2");
+}
+
+void test_constraints_meet_at_existing_site() {
+    const std::vector<Point> points = {
+        {-20, 0},
+        {20, 0},
+        {0, -20},
+        {0, 20},
+        {0, 0},
+        {-30, -30},
+        {30, -30},
+        {30, 30},
+        {-30, 30},
+    };
+    const std::vector<Constraint> constraints = {{0, 1}, {2, 3}};
+    Triangulator triangulator;
+    const std::vector<Triangle> triangles =
+        triangulator.triangulate_constrained_int(points, constraints);
+    require_valid_constrained_mesh(
+        points,
+        triangles,
+        constraints,
+        "constraints meeting at an existing site");
+    require(mesh_has_edge(triangles, 0, 4), "horizontal chain misses 0-4");
+    require(mesh_has_edge(triangles, 4, 1), "horizontal chain misses 4-1");
+    require(mesh_has_edge(triangles, 2, 4), "vertical chain misses 2-4");
+    require(mesh_has_edge(triangles, 4, 3), "vertical chain misses 4-3");
+}
+
+void test_constrained_duplicates_and_empty_input() {
+    const std::vector<Point> unique = {
+        {0, 0},
+        {100, 0},
+        {0, 100},
+        {100, 100},
+        {35, 45},
+    };
+    const std::array<std::uint32_t, 5> representative = {0, 1, 3, 4, 6};
+    const std::vector<Point> duplicated = {
+        unique[0],
+        unique[1],
+        unique[0],
+        unique[2],
+        unique[3],
+        unique[1],
+        unique[4],
+        unique[4],
+    };
+
+    Triangulator triangulator;
+    std::vector<Triangle> expected =
+        triangulator.triangulate_constrained_int(unique, {{0, 4}});
+    for (Triangle& triangle : expected) {
+        triangle.i0 = representative[triangle.i0];
+        triangle.i1 = representative[triangle.i1];
+        triangle.i2 = representative[triangle.i2];
+    }
+    const std::vector<Triangle> candidate =
+        triangulator.triangulate_constrained_int(duplicated, {{2, 7}});
+    require(
+        benchmark_support::meshes_equal(expected, candidate),
+        "duplicate constraint endpoints did not map to representatives");
+    require(
+        mesh_has_edge(candidate, representative[0], representative[4]),
+        "constraint using duplicate endpoints was not recovered");
+
+    const std::vector<Triangle> ordinary =
+        triangulator.triangulate_int(unique);
+    const std::vector<Triangle> empty =
+        triangulator.triangulate_constrained_int(unique, {});
+    require(
+        benchmark_support::meshes_equal(ordinary, empty),
+        "empty constraint input changed the ordinary triangulation");
+
+    require_invalid(
+        [&] {
+            triangulator.triangulate_constrained_int(
+                duplicated, {{0, 2}});
+        },
+        "distinct constraint indices at the same coordinate");
+}
+
+void test_collinear_constrained_input() {
+    const std::vector<Point> points = {
+        {-20, -39},
+        {-10, -19},
+        {0, 1},
+        {10, 21},
+        {20, 41},
+    };
+    Triangulator triangulator;
+    require(
+        triangulator.triangulate_constrained_int(points, {{0, 4}}).empty(),
+        "collinear constrained input produced a triangle");
+}
+
+void test_parallel_constraints() {
+    std::vector<Point> grid;
+    grid.reserve(50000);
+    for (std::int32_t y = 0; y < 200; ++y) {
+        for (std::int32_t x = 0; x < 250; ++x) {
+            grid.push_back({x, y});
+        }
+    }
+    const std::vector<Constraint> grid_constraints = {{0, 49999}};
+    Triangulator grid_serial(1);
+    Triangulator grid_parallel(4);
+    const std::vector<Triangle> grid_serial_mesh =
+        grid_serial.triangulate_constrained_int(grid, grid_constraints);
+    const std::vector<Triangle> grid_parallel_mesh =
+        grid_parallel.triangulate_constrained_int(grid, grid_constraints);
+    require(
+        benchmark_support::meshes_equal(
+            grid_serial_mesh, grid_parallel_mesh),
+        "cocircular constrained serial and parallel triangle sets differ");
+    require_valid_constrained_mesh(
+        grid,
+        grid_parallel_mesh,
+        grid_constraints,
+        "cocircular parallel constrained case");
+
+#if defined(__SIZEOF_INT128__)
+    const std::vector<Point> points =
+        benchmark_support::generate_points(
+            Dataset::Uniform, 60000, 0xCD7128ULL, 100000);
+    const std::vector<Constraint> constraints = {{17, 42371}};
+    Triangulator serial(1);
+    Triangulator parallel(4);
+    const std::vector<Triangle> serial_mesh =
+        serial.triangulate_constrained_int(points, constraints);
+    const std::vector<Triangle> parallel_mesh =
+        parallel.triangulate_constrained_int(points, constraints);
+    require(
+        benchmark_support::meshes_equal(serial_mesh, parallel_mesh),
+        "wide constrained serial and parallel triangle sets differ");
+    require_valid_constrained_mesh(
+        points,
+        parallel_mesh,
+        constraints,
+        "wide parallel constrained case");
+#endif
+}
+
+void test_invalid_constraints() {
+    const std::vector<Point> square = {
+        {0, 0},
+        {100, 0},
+        {100, 100},
+        {0, 100},
+    };
+    Triangulator triangulator;
+    require_invalid(
+        [&] {
+            triangulator.triangulate_constrained_int(
+                square, {{0, 4}});
+        },
+        "constraint endpoint outside point array");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_constrained_int(
+                square, {{2, 2}});
+        },
+        "zero-length constraint");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_constrained_int(
+                square, {{0, 2}, {1, 3}});
+        },
+        "properly intersecting constraints");
+
+    const std::vector<Triangle> recovered =
+        triangulator.triangulate_constrained_int(square, {{0, 2}});
+    require_valid_constrained_mesh(
+        square,
+        recovered,
+        {{0, 2}},
+        "reuse after invalid constrained input");
+}
+
 void test_invalid_inputs() {
     Triangulator triangulator;
     const std::vector<FloatPoint> valid_float_triangle = {
@@ -845,11 +1351,22 @@ int main() {
         delaunay32::test_duplicates();
         delaunay32::test_collinear_input();
         delaunay32::test_wide_predicates();
+        delaunay32::test_single_constraint_recovery();
+        delaunay32::test_constrained_random_cases();
+        delaunay32::test_multiple_constraints();
+        delaunay32::test_collinear_constraint_chain();
+        delaunay32::test_constraint_cycle();
+        delaunay32::test_constraint_split_at_unconnected_site();
+        delaunay32::test_constraints_meet_at_existing_site();
+        delaunay32::test_constrained_duplicates_and_empty_input();
+        delaunay32::test_collinear_constrained_input();
+        delaunay32::test_parallel_constraints();
+        delaunay32::test_invalid_constraints();
         delaunay32::test_invalid_inputs();
         std::cout
             << "validation passed: deterministic, duplicate, collinear, "
                "integer/float/full API, quantization options, "
-               "predicate-width, and parallel cases\n";
+               "predicate-width, constrained, and parallel cases\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "validation failed: " << error.what() << '\n';

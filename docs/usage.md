@@ -31,6 +31,7 @@ representative mappings, and operation metadata.
 | Input layout | Coordinates | Call |
 |:--|:--|:--|
 | `std::vector<Point>` | signed 32-bit integers | `triangulate_int(points)` |
+| `std::vector<Point>` plus `std::vector<Constraint>` | integers | `triangulate_constrained_int(points, constraints)` |
 | `std::vector<FloatPoint>` | 32-bit floats | `triangulate_float(points)` |
 | `std::vector<Point>` with full output | integers | `triangulate_int_full(points)` |
 | `std::vector<FloatPoint>` with full output | floats | `triangulate_float_full(points)` |
@@ -78,9 +79,23 @@ quantized-coincident points are collapsed, the retained vertex is the lowest
 original input index at that grid coordinate.
 
 Triangles are counterclockwise in the coordinates used for triangulation. That
-means the original integer coordinates for `triangulate_int()` and the internal
-quantized coordinates for `triangulate_float()`. In nearly degenerate source
-geometry, restoring the original coordinates can produce a different winding.
+means the original integer coordinates for `triangulate_int()` and
+`triangulate_constrained_int()`, and the internal quantized coordinates for
+`triangulate_float()`. In nearly degenerate source geometry, restoring the
+original coordinates can produce a different winding.
+
+### `Constraint`
+
+```cpp
+struct Constraint {
+    std::uint32_t i0;
+    std::uint32_t i1;
+};
+```
+
+`Constraint` identifies an undirected segment whose endpoints index the
+original integer point vector. It is used by
+`triangulate_constrained_int()` only.
 
 ### `Triangulator`
 
@@ -205,9 +220,9 @@ pair of coordinate spans:
 - `Int128`: the wider path, available when the compiler provides `__int128`;
 - `Unsupported`: the requested spans are outside the certified range.
 
-Most callers do not need to select a predicate width. `triangulate_int()` checks
-the input and chooses automatically. The public selector is useful for
-validating a domain before loading or generating a large point set:
+Most callers do not need to select a predicate width. The integer triangulation
+calls check the input and choose automatically. The public selector is useful
+for validating a domain before loading or generating a large point set:
 
 ```cpp
 const auto width = delaunay32::Triangulator::predicate_width_for_spans(
@@ -244,6 +259,38 @@ const std::vector<delaunay32::Triangle> triangles =
 ```
 
 The vector is passed by const reference and is not modified.
+
+### Constrained Delaunay input
+
+```cpp
+std::vector<delaunay32::Constraint> constraints = {
+    {0, 2},
+    {2, 4},
+};
+
+const std::vector<delaunay32::Triangle> triangles =
+    triangulator.triangulate_constrained_int(points, constraints);
+```
+
+This call first constructs the ordinary integer Delaunay triangulation, then
+recovers every constraint with topology-preserving edge flips. A requested
+segment appears directly as an edge when possible. If one or more existing
+input points lie in its interior, it appears as a chain of consecutive mesh
+edges instead. All remaining flippable interior edges are locally Delaunay.
+
+Constraints may share endpoints, overlap along the same line, or meet at an
+existing input point. Repeated and reversed copies are accepted. Proper
+crossings away from an existing input point are rejected; the implementation
+does not insert intersection or Steiner points. Both endpoint indices must be
+valid and must resolve to different retained coordinates. Duplicate point
+indices resolve to their lowest-index representative.
+
+The returned faces cover the full convex hull of the input. The call does not
+interpret constraints as polygon rings, classify inside/outside regions, clip
+triangles, or remove holes. Constraint recovery is currently serial; initial
+topology construction and final triangle export still use the requested worker
+count for sufficiently large inputs. There is not yet a constrained full-result
+overload.
 
 ### Exactness and supported spans
 
@@ -417,6 +464,11 @@ The triangulation functions throw `std::invalid_argument` when:
   or map outside the supported integer domain;
 - integer coordinate spans exceed the certified predicate range;
 - the input count exceeds the internal index or edge-arena range.
+
+`triangulate_constrained_int()` also throws `std::invalid_argument` when a
+constraint endpoint is outside the point array, when both endpoints resolve to
+the same retained coordinate, or when constraints cross away from an existing
+input point.
 
 As with other allocating C++ interfaces, allocation failures can propagate as
 standard library exceptions.

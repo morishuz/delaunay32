@@ -24,6 +24,11 @@ int main() {
         integer_result.representatives.size() != integer_points.size()) {
         return 2;
     }
+    const std::vector<delaunay32::Constraint> constraints = {{0, 2}};
+    if (triangulator.triangulate_constrained_int(
+            integer_points, constraints).size() != 4) {
+        return 5;
+    }
 
     const std::vector<delaunay32::FloatPoint> float_points = {
         {0.0F, 0.0F},

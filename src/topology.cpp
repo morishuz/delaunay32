@@ -723,6 +723,81 @@ void Triangulator::delete_edge(std::uint32_t edge) {
     edge_origin_[pair + 1] = kDeletedEdge;
 }
 
+bool Triangulator::is_live_edge(std::uint32_t edge) const {
+    const std::uint32_t pair = edge & ~1U;
+    return pair + 1U < edge_origin_.size() &&
+           edge_origin_[pair] != kDeletedEdge;
+}
+
+bool Triangulator::is_constrained(std::uint32_t edge) const {
+    return edge_constrained_[edge & ~1U] != 0;
+}
+
+void Triangulator::mark_constrained(std::uint32_t edge) {
+    const std::uint32_t pair = edge & ~1U;
+    edge_constrained_[pair] = 1;
+    edge_constrained_[pair + 1U] = 1;
+}
+
+bool Triangulator::left_face_opposite(
+    std::uint32_t edge,
+    std::uint32_t& opposite) const {
+    if (!is_live_edge(edge)) {
+        return false;
+    }
+    const std::uint32_t second = lnext(edge);
+    const std::uint32_t third = lnext(second);
+    if (lnext(third) != edge) {
+        return false;
+    }
+    opposite = dest(second);
+    return orient(org(edge), dest(edge), opposite) > 0;
+}
+
+bool Triangulator::can_flip(std::uint32_t edge) const {
+    if (!is_live_edge(edge) || is_constrained(edge)) {
+        return false;
+    }
+    std::uint32_t left = 0;
+    std::uint32_t right = 0;
+    if (!left_face_opposite(edge, left) ||
+        !left_face_opposite(sym(edge), right)) {
+        return false;
+    }
+    const std::int64_t origin_side =
+        orient(left, right, org(edge));
+    const std::int64_t destination_side =
+        orient(left, right, dest(edge));
+    return (origin_side > 0 && destination_side < 0) ||
+           (origin_side < 0 && destination_side > 0);
+}
+
+void Triangulator::flip_edge(std::uint32_t edge) {
+    if (!can_flip(edge)) {
+        throw std::logic_error("attempted to flip a nonflippable edge");
+    }
+    const std::uint32_t old_origin = org(edge);
+    const std::uint32_t old_destination = dest(edge);
+    const std::uint32_t origin_previous = oprev(edge);
+    const std::uint32_t destination_previous = oprev(sym(edge));
+
+    // Guibas-Stolfi diagonal swap. Reusing the dart pair avoids growing the
+    // append-only construction arena during constraint recovery.
+    splice(edge, origin_previous);
+    splice(sym(edge), destination_previous);
+    splice(edge, lnext(origin_previous));
+    splice(sym(edge), lnext(destination_previous));
+    edge_origin_[edge] = dest(origin_previous);
+    edge_origin_[sym(edge)] = dest(destination_previous);
+
+    if (!site_edge_.empty()) {
+        site_edge_[old_origin] = origin_previous;
+        site_edge_[old_destination] = destination_previous;
+        site_edge_[org(edge)] = edge;
+        site_edge_[dest(edge)] = sym(edge);
+    }
+}
+
 std::int64_t Triangulator::orient(
     std::uint32_t a,
     std::uint32_t b,
@@ -746,6 +821,16 @@ bool Triangulator::right_of(
     std::uint32_t point,
     std::uint32_t edge) const {
     return orient(org(edge), dest(edge), point) < 0;
+}
+
+bool Triangulator::active_in_circle(
+    std::uint32_t a,
+    std::uint32_t b,
+    std::uint32_t c,
+    std::uint32_t d) const {
+    return wide_lifts_.empty()
+               ? in_circle<false>(a, b, c, d)
+               : in_circle<true>(a, b, c, d);
 }
 
 template <bool WidePredicates>

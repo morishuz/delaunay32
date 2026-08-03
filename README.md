@@ -23,6 +23,7 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Signed 32-bit integer input, including negative coordinates and large offsets
 - Serial and shared-memory parallel execution
 - Deterministic handling of duplicate points
+- Constrained Delaunay triangulation for noncrossing integer segments
 - Triangle indices referencing the original input, counterclockwise on the
   triangulation grid
 - Opt-in halfedge adjacency, convex hull, and duplicate representative mapping
@@ -70,6 +71,8 @@ describe it as probably the fastest open-source C++ implementation.
 
 Delaunator-cpp is included only as an optional benchmark submodule. `Delaunay32`
 does not wrap it or depend on it as part of the triangulation algorithm.
+The published tables measure ordinary point-set triangulation; constrained
+segment recovery is not included in those timings.
 
 ### Headline results
 
@@ -243,6 +246,26 @@ computed on the internal integer grid, so edge choices can differ from an exact
 Delaunay triangulation of the original floating-point values, particularly near
 geometric degeneracies.
 
+### Constrained integer input
+
+Pass edges as pairs of indices into the same integer point vector:
+
+```cpp
+std::vector<delaunay32::Constraint> constraints = {
+    {0, 2},
+    {2, 4},
+};
+
+const std::vector<delaunay32::Triangle> triangles =
+    triangulator.triangulate_constrained_int(points, constraints);
+```
+
+The result triangulates the full convex hull while preserving every constraint
+as a mesh edge or, when an existing point lies on the segment, as a chain of
+mesh edges. Proper crossings away from an existing point are rejected. This API
+does not clip polygons or remove holes; those operations can be built later on
+top of constrained edges.
+
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
 are independent.
@@ -278,7 +301,9 @@ At a high level, Delaunay32:
 3. constructs small divide-and-conquer leaves using exact orientation and
    in-circle predicates;
 4. merges neighboring triangulations through compact primal edge rings;
-5. marks the outer face and materializes indices that are counterclockwise in
+5. optionally recovers constrained segments with in-place edge flips and
+   legalizes every unconstrained edge;
+6. marks the outer face and materializes indices that are counterclockwise in
    the triangulation coordinates.
 
 For large inputs, radix sorting, independent subtrees, merge levels, and
@@ -401,6 +426,7 @@ Included:
 - finite float coordinates through configurable uniform quantization
 - exact certified predicates
 - deterministic duplicate handling
+- constrained Delaunay edges for integer input
 - serial and shared-memory parallel construction
 - triangle indices that are counterclockwise on the triangulation grid
 - up to `2^31 - 1` input entries, subject to available memory
@@ -408,7 +434,7 @@ Included:
 Not included:
 
 - exact predicates on the unquantized floating-point coordinates
-- constrained edges, holes, or polygon clipping
+- polygon-domain clipping, holes, or automatic intersection vertices
 - dynamic insertion or deletion
 - Voronoi output
 

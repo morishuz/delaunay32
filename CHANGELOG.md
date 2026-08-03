@@ -3,6 +3,15 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `Constraint` and `triangulate_constrained_int()`, providing exact
+  constrained Delaunay triangulation of integer point sets with noncrossing
+  segments, collinear segment chains, duplicate representatives, and
+  constraints meeting at existing sites.
+
 ## 0.4.0 - 2026-08-03
 
 ### Added

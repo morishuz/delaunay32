@@ -37,6 +37,13 @@ struct Triangle {
     std::uint32_t i2 = 0;
 };
 
+// An undirected edge that must be present in a constrained triangulation.
+// Endpoints index the caller's original point array.
+struct Constraint {
+    std::uint32_t i0 = 0;
+    std::uint32_t i1 = 0;
+};
+
 enum class PredicateWidth {
     Int64,
     Int128,
@@ -146,6 +153,13 @@ public:
     std::vector<Triangle> triangulate_int(
         const std::vector<Point>& points);
 
+    // Constructs a constrained Delaunay triangulation of the convex hull.
+    // Constraint endpoints index the original point array. Properly crossing
+    // constraints are rejected; constraints may meet at existing sites.
+    std::vector<Triangle> triangulate_constrained_int(
+        const std::vector<Point>& points,
+        const std::vector<Constraint>& constraints);
+
     // Uniformly quantizes finite floating-point coordinates. The returned
     // indices still reference the original input; only topology decisions use
     // the quantized coordinates.
@@ -245,7 +259,10 @@ private:
     std::vector<std::uint32_t> edge_origin_;
     std::vector<std::uint32_t> edge_next_;
     std::vector<std::uint32_t> edge_prev_;
+    std::vector<std::uint8_t> edge_constrained_;
     std::vector<EdgeRange> edge_ranges_;
+    std::vector<std::uint32_t> original_to_site_;
+    std::vector<std::uint32_t> site_edge_;
     std::vector<Triangle> triangles_out_;
     std::vector<std::int64_t> halfedges_out_;
     std::vector<std::uint32_t> hull_out_;
@@ -271,7 +288,7 @@ private:
         const std::vector<FloatPoint>& points,
         const QuantizationOptions& options,
         QuantizationReport* report);
-    PredicateWidth triangulate_loaded_points(
+    PredicateWidth build_loaded_topology(
         std::vector<std::uint32_t>* representatives = nullptr,
         bool reject_duplicates = false);
     TriangulationResult make_result(
@@ -344,6 +361,40 @@ private:
         EdgeCursor* cursor = nullptr);
     void splice(std::uint32_t a, std::uint32_t b);
     void delete_edge(std::uint32_t edge);
+    void flip_edge(std::uint32_t edge);
+    bool is_live_edge(std::uint32_t edge) const;
+    bool is_constrained(std::uint32_t edge) const;
+    void mark_constrained(std::uint32_t edge);
+    bool left_face_opposite(
+        std::uint32_t edge,
+        std::uint32_t& opposite) const;
+    bool can_flip(std::uint32_t edge) const;
+    bool active_in_circle(
+        std::uint32_t a,
+        std::uint32_t b,
+        std::uint32_t c,
+        std::uint32_t d) const;
+    void build_constraint_indices(
+        const std::vector<std::uint32_t>& representatives,
+        std::size_t original_point_count);
+    void recover_constraints(
+        const std::vector<Constraint>& constraints);
+    void recover_constraint(std::uint32_t a, std::uint32_t b);
+    std::uint32_t find_edge(
+        std::uint32_t origin,
+        std::uint32_t destination) const;
+    std::uint32_t first_collinear_edge(
+        std::uint32_t origin,
+        std::uint32_t destination) const;
+    std::vector<std::uint32_t> crossed_edges(
+        std::uint32_t a,
+        std::uint32_t b,
+        std::uint32_t& reached) const;
+    bool properly_intersects(
+        std::uint32_t edge,
+        std::uint32_t a,
+        std::uint32_t b) const;
+    void legalize_unconstrained_edges();
     void export_triangles();
     void export_triangles_parallel(
         std::size_t thread_count,
