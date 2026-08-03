@@ -3,7 +3,7 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.0 - 2026-08-03
 
 ### Added
 

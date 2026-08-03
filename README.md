@@ -390,7 +390,7 @@ production path stays readable.
 
 Delaunay32 follows Semantic Versioning. The version in `CMakeLists.txt` is the
 single source of truth, and published releases use annotated tags such as
-`v0.3.0`. Tags are created from tested commits on `main`, never from feature
+`v0.4.0`. Tags are created from tested commits on `main`, never from feature
 branches. See the [release process](docs/releasing.md) for the checklist.
 
 ## Scope
