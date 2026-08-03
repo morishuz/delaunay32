@@ -722,6 +722,20 @@ void test_wide_predicates() {
 
 void test_invalid_inputs() {
     Triangulator triangulator;
+    const std::vector<FloatPoint> valid_float_triangle = {
+        {0.0F, 0.0F},
+        {1.0F, 0.0F},
+        {0.0F, 1.0F},
+    };
+    const auto require_invalid_options =
+        [&](const QuantizationOptions& options, const char* label) {
+            require_invalid(
+                [&] {
+                    triangulator.triangulate_float(
+                        valid_float_triangle, options);
+                },
+                label);
+        };
     require_invalid(
         [&] {
             triangulator.triangulate_int({{0, 0}, {1, 1}});
@@ -759,29 +773,28 @@ void test_invalid_inputs() {
         "infinite float coordinate");
     QuantizationOptions invalid_grid;
     invalid_grid.mode = QuantizationMode::GridStep;
-    require_invalid(
-        [&] {
-            triangulator.triangulate_float(
-                std::vector<FloatPoint>{
-                    {0.0F, 0.0F}, {1.0F, 0.0F}, {0.0F, 1.0F},
-                },
-                invalid_grid);
-        },
-        "zero quantization grid step");
+    require_invalid_options(invalid_grid, "zero quantization grid step");
     QuantizationOptions invalid_fixed;
     invalid_fixed.mode = QuantizationMode::FixedScale;
     invalid_fixed.origin_x = 0.0;
     invalid_fixed.origin_y = 0.0;
     invalid_fixed.scale = -1.0;
-    require_invalid(
-        [&] {
-            triangulator.triangulate_float(
-                std::vector<FloatPoint>{
-                    {0.0F, 0.0F}, {1.0F, 0.0F}, {0.0F, 1.0F},
-                },
-                invalid_fixed);
-        },
-        "negative fixed quantization scale");
+    require_invalid_options(
+        invalid_fixed, "negative fixed quantization scale");
+    QuantizationOptions invalid_error;
+    invalid_error.max_coordinate_error =
+        std::numeric_limits<double>::quiet_NaN();
+    require_invalid_options(
+        invalid_error, "non-finite maximum quantization error");
+    QuantizationOptions invalid_mode;
+    invalid_mode.mode = static_cast<QuantizationMode>(255);
+    require_invalid_options(invalid_mode, "unknown quantization mode");
+    QuantizationOptions invalid_collision_policy;
+    invalid_collision_policy.collision_policy =
+        static_cast<QuantizationCollisionPolicy>(255);
+    require_invalid_options(
+        invalid_collision_policy,
+        "unknown quantization collision policy");
     const float maximum = std::numeric_limits<float>::max();
     require_invalid(
         [&] {

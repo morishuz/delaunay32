@@ -31,6 +31,16 @@ endif()
 function(delaunay32_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(
+            ${target}
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wconversion
+                -Wshadow
+                -Wsign-conversion
+        )
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()

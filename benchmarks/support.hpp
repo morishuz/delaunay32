@@ -50,9 +50,14 @@ inline std::vector<Point> generate_points(
     std::size_t count,
     std::uint64_t seed,
     std::int32_t domain = 100000) {
-    const std::uint64_t capacity =
-        static_cast<std::uint64_t>(domain) * domain;
-    if (domain < 2 || count > capacity) {
+    if (domain < 2) {
+        throw std::invalid_argument(
+            "point count exceeds the integer domain");
+    }
+    const std::uint64_t unsigned_domain =
+        static_cast<std::uint64_t>(domain);
+    const std::uint64_t capacity = unsigned_domain * unsigned_domain;
+    if (count > capacity) {
         throw std::invalid_argument(
             "point count exceeds the integer domain");
     }
@@ -93,7 +98,8 @@ inline std::vector<Point> generate_points(
         if (dataset == Dataset::Uniform) {
             point = {coordinate(random), coordinate(random)};
         } else if (dataset == Dataset::Clustered) {
-            const auto& center = centers[cluster_index(random)];
+            const auto& center = centers[
+                static_cast<std::size_t>(cluster_index(random))];
             point.x = std::clamp(
                 center[0] + cluster_offset(random),
                 std::int32_t{0},
@@ -106,7 +112,8 @@ inline std::vector<Point> generate_points(
             point.x = coordinate(random);
             const std::int64_t raw_y =
                 static_cast<std::int64_t>(point.x) +
-                diagonal_offsets[band_index(random)] +
+                diagonal_offsets[
+                    static_cast<std::size_t>(band_index(random))] +
                 diagonal_jitter(random);
             point.y = static_cast<std::int32_t>(
                 (raw_y % domain + domain) % domain);

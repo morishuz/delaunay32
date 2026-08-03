@@ -181,18 +181,15 @@ FloatQuantizer make_float_quantizer(
     throw std::invalid_argument("unknown quantization mode");
 }
 
-void initialize_quantization_report(
-    QuantizationReport* report,
+QuantizationReport make_quantization_report(
     const FloatQuantizer& quantizer) {
-    if (report == nullptr) {
-        return;
-    }
-    *report = {};
-    report->origin_x = quantizer.origin_x;
-    report->origin_y = quantizer.origin_y;
-    report->scale = quantizer.scale;
-    report->grid_step =
+    QuantizationReport report;
+    report.origin_x = quantizer.origin_x;
+    report.origin_y = quantizer.origin_y;
+    report.scale = quantizer.scale;
+    report.grid_step =
         quantizer.scale == 0.0 ? 0.0 : 1.0 / quantizer.scale;
+    return report;
 }
 
 // Shared predicate-span checks for Int64 vs Int128 certification.
@@ -351,8 +348,7 @@ void Triangulator::load_float_points(
     const FloatBounds bounds = find_float_bounds(points);
     const FloatQuantizer quantizer =
         make_float_quantizer(bounds, options);
-    QuantizationReport measured;
-    initialize_quantization_report(&measured, quantizer);
+    QuantizationReport measured = make_quantization_report(quantizer);
     const bool measure_error =
         report != nullptr || options.max_coordinate_error > 0.0;
 
