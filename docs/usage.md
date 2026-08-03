@@ -32,6 +32,7 @@ representative mappings, and operation metadata.
 |:--|:--|:--|
 | `std::vector<Point>` | signed 32-bit integers | `triangulate_int(points)` |
 | `std::vector<Point>` plus `std::vector<Constraint>` | integers | `triangulate_constrained_int(points, constraints)` |
+| `std::vector<Point>` plus index rings | integers | `triangulate_polygon_int(points, outer, holes)` |
 | `std::vector<FloatPoint>` | 32-bit floats | `triangulate_float(points)` |
 | `std::vector<Point>` with full output | integers | `triangulate_int_full(points)` |
 | `std::vector<FloatPoint>` with full output | floats | `triangulate_float_full(points)` |
@@ -80,9 +81,10 @@ original input index at that grid coordinate.
 
 Triangles are counterclockwise in the coordinates used for triangulation. That
 means the original integer coordinates for `triangulate_int()` and
-`triangulate_constrained_int()`, and the internal quantized coordinates for
-`triangulate_float()`. In nearly degenerate source geometry, restoring the
-original coordinates can produce a different winding.
+`triangulate_constrained_int()` or `triangulate_polygon_int()`, and the
+internal quantized coordinates for `triangulate_float()`. In nearly degenerate
+source geometry, restoring the original coordinates can produce a different
+winding.
 
 ### `Constraint`
 
@@ -285,12 +287,43 @@ does not insert intersection or Steiner points. Both endpoint indices must be
 valid and must resolve to different retained coordinates. Duplicate point
 indices resolve to their lowest-index representative.
 
-The returned faces cover the full convex hull of the input. The call does not
-interpret constraints as polygon rings, classify inside/outside regions, clip
-triangles, or remove holes. Constraint recovery is currently serial; initial
-topology construction and final triangle export still use the requested worker
-count for sufficiently large inputs. There is not yet a constrained full-result
-overload.
+The returned faces cover the full convex hull of the input. Constraint recovery
+is currently serial; initial topology construction and final triangle export
+still use the requested worker count for sufficiently large inputs. There is
+not yet a constrained full-result overload.
+
+### Polygon domains with holes
+
+```cpp
+std::vector<std::uint32_t> outer = {0, 1, 2, 3};
+std::vector<std::vector<std::uint32_t>> holes = {
+    {4, 5, 6, 7},
+    {8, 9, 10, 11},
+};
+
+const std::vector<delaunay32::Triangle> triangles =
+    triangulator.triangulate_polygon_int(points, outer, holes);
+```
+
+Every ring contains indices into `points`; its last-to-first edge is implicit.
+A repeated first index at the end is optional. Clockwise and counterclockwise
+rings are both accepted and normalized internally. Existing input points on a
+boundary segment split that segment into a constrained edge chain without
+requiring the points to be named in the ring.
+
+The returned triangles cover the outer-ring interior minus every hole. Input
+points outside the outer ring or inside a hole are accepted and omitted from
+the result. Ring indices resolve through the same lowest-index coordinate
+representatives as the other APIs; repeating one retained coordinate within a
+ring is invalid.
+
+Rings must be simple, mutually disjoint, and non-touching. Each hole must lie
+strictly inside the outer ring; holes may not overlap, touch, or nest. Boundary
+validation is currently quadratic in the total ring-edge count. The method
+does not create vertices at intersections and does not insert Steiner points.
+Boundary recovery and domain classification are serial; large initial
+triangulations and final exports still use the requested worker count. There is
+not yet a polygon full-result overload.
 
 ### Exactness and supported spans
 
@@ -470,6 +503,10 @@ constraint endpoint is outside the point array, when both endpoints resolve to
 the same retained coordinate, or when constraints cross away from an existing
 input point.
 
+`triangulate_polygon_int()` also throws `std::invalid_argument` for invalid or
+repeated ring coordinates, self-intersections, touching or crossing rings,
+holes outside the outer ring, and overlapping or nested holes.
+
 As with other allocating C++ interfaces, allocation failures can propagate as
 standard library exceptions.
 
@@ -483,6 +520,9 @@ standard library exceptions.
 - [`delaunay_constrained_example.cpp`](../examples/delaunay_constrained_example.cpp)
   loads a fixed JSON point/constraint set and writes ordinary and constrained
   meshes side by side.
+- [`delaunay_polygon_example.cpp`](../examples/delaunay_polygon_example.cpp)
+  loads indexed outer and hole rings, triangulates the domain, and renders
+  retained and omitted points.
 
 Build all examples with:
 
@@ -491,10 +531,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target \
   delaunay_float_example \
   delaunay_svg_example \
-  delaunay_constrained_example
+  delaunay_constrained_example \
+  delaunay_polygon_example
 ```
 
 The example JSON schema stores points as `[x, y]`, constraints as endpoint-index
-pairs, and reserves `polygon.outer` plus `polygon.holes` for polygon-domain
-examples. The parser belongs only to the examples; the installed library has no
-JSON dependency.
+pairs, and polygon rings as `polygon.outer` plus `polygon.holes`. The parser
+belongs only to the examples; the installed library has no JSON dependency.

@@ -380,4 +380,130 @@ void write_constrained_comparison_svg(
     }
 }
 
+void write_polygon_svg(
+    const std::string& output_path,
+    const std::vector<Point>& points,
+    const std::vector<std::uint32_t>& outer_ring,
+    const std::vector<std::vector<std::uint32_t>>& holes,
+    const std::vector<Triangle>& triangles) {
+    constexpr double canvas_width = 1040.0;
+    constexpr double canvas_height = 820.0;
+    constexpr double plot_left = 54.0;
+    constexpr double plot_top = 126.0;
+    constexpr double plot_width = 932.0;
+    constexpr double plot_height = 640.0;
+
+    std::ofstream output(output_path);
+    if (!output) {
+        throw std::runtime_error("could not create SVG: " + output_path);
+    }
+    const ComparisonTransform transform(
+        points, plot_left, plot_top, plot_width, plot_height);
+    const auto write_ring_path = [&](const std::vector<std::uint32_t>& ring) {
+        output << 'M';
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            output << (i == 0 ? " " : " L ");
+            const std::uint32_t index = ring[i];
+            write_point(output, points[index], transform);
+        }
+        output << " Z ";
+    };
+
+    output
+        << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+        << canvas_width << "\" height=\"" << canvas_height
+        << "\" viewBox=\"0 0 " << canvas_width << ' ' << canvas_height
+        << "\">\n"
+        << "<defs><filter id=\"shadow\" x=\"-10%\" y=\"-10%\" "
+           "width=\"120%\" height=\"125%\"><feDropShadow dx=\"0\" "
+           "dy=\"7\" stdDeviation=\"9\" flood-color=\"#142226\" "
+           "flood-opacity=\"0.16\"/></filter></defs>\n"
+        << "<rect width=\"100%\" height=\"100%\" fill=\"#f2f5f3\"/>\n"
+        << "<text x=\"54\" y=\"45\" font-family=\"system-ui, sans-serif\" "
+           "font-size=\"27\" font-weight=\"720\" fill=\"#172326\">"
+           "Delaunay32 polygon triangulation</text>\n"
+        << "<text x=\"54\" y=\"76\" font-family=\"system-ui, sans-serif\" "
+           "font-size=\"15\" fill=\"#5b686c\">"
+        << points.size() << " input points · " << holes.size()
+        << " holes · " << triangles.size()
+        << " domain triangles · hollow points are outside the domain</text>\n"
+        << "<path d=\"";
+    write_ring_path(outer_ring);
+    for (const std::vector<std::uint32_t>& hole : holes) {
+        write_ring_path(hole);
+    }
+    output
+        << "\" fill=\"#ffffff\" fill-rule=\"evenodd\" "
+           "filter=\"url(#shadow)\"/>\n";
+
+    static constexpr std::array<const char*, 8> colors = {
+        "#d8eee7",
+        "#d9e7f3",
+        "#f1e2a8",
+        "#e6def0",
+        "#cce7ec",
+        "#e5ebc8",
+        "#f0d9cf",
+        "#d8e5d5",
+    };
+    std::vector<bool> used(points.size(), false);
+    for (const Triangle& triangle : triangles) {
+        used[triangle.i0] = true;
+        used[triangle.i1] = true;
+        used[triangle.i2] = true;
+        const std::size_t color =
+            (static_cast<std::size_t>(triangle.i0) * 17 +
+             static_cast<std::size_t>(triangle.i1) * 31 +
+             static_cast<std::size_t>(triangle.i2) * 43) %
+            colors.size();
+        output << "<polygon fill=\"" << colors[color]
+               << "\" stroke=\"#58676b\" stroke-width=\"0.85\" "
+                  "stroke-linejoin=\"round\" points=\"";
+        write_point(output, points[triangle.i0], transform);
+        output << ' ';
+        write_point(output, points[triangle.i1], transform);
+        output << ' ';
+        write_point(output, points[triangle.i2], transform);
+        output << "\"/>\n";
+    }
+
+    const auto write_ring_outline = [&](const std::vector<std::uint32_t>& ring,
+                                        const char* color,
+                                        double width) {
+        output << "<polyline fill=\"none\" stroke=\"" << color
+               << "\" stroke-width=\"" << width
+               << "\" stroke-linejoin=\"round\" stroke-linecap=\"round\" "
+                  "points=\"";
+        for (const std::uint32_t index : ring) {
+            write_point(output, points[index], transform);
+            output << ' ';
+        }
+        write_point(output, points[ring.front()], transform);
+        output << "\"/>\n";
+    };
+    write_ring_outline(outer_ring, "#172f35", 5.2);
+    for (const std::vector<std::uint32_t>& hole : holes) {
+        write_ring_outline(hole, "#b54b42", 4.3);
+    }
+
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const Point& point = points[i];
+        output << "<circle cx=\"" << std::fixed << std::setprecision(2)
+               << transform.x(point.x) << "\" cy=\""
+               << transform.y(point.y) << "\" r=\""
+               << (used[i] ? 3.3 : 4.0) << "\" fill=\""
+               << (used[i] ? "#132125" : "#f2f5f3")
+               << "\" stroke=\""
+               << (used[i] ? "#ffffff" : "#b54b42")
+               << "\" stroke-width=\"" << (used[i] ? 1.0 : 2.0)
+               << "\"/>\n";
+    }
+    output << "</svg>\n";
+    if (!output) {
+        throw std::runtime_error(
+            "failed while writing SVG: " + output_path);
+    }
+}
+
 }  // namespace delaunay32_example

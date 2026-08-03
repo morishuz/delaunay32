@@ -51,6 +51,7 @@ set(DELAUNAY32_LIBRARY_SOURCES
     src/delaunay.cpp
     src/export.cpp
     src/internal.hpp
+    src/polygon.cpp
     src/result.cpp
     src/topology.cpp
     src/worker_team.cpp
@@ -100,6 +101,18 @@ if(DELAUNAY32_BUILD_EXAMPLES)
     target_link_libraries(
         delaunay_constrained_example PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_constrained_example)
+
+    add_executable(
+        delaunay_polygon_example
+        examples/delaunay_polygon_example.cpp
+        examples/geometry_io.cpp
+        examples/geometry_io.hpp
+        examples/svg_io.cpp
+        examples/svg_io.hpp
+    )
+    target_link_libraries(
+        delaunay_polygon_example PRIVATE delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay_polygon_example)
 endif()
 
 set(DELAUNATOR_HEADER
@@ -218,6 +231,11 @@ if(DELAUNAY32_BUILD_TESTS)
             COMMAND delaunay_constrained_example
                     "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/constrained.json"
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-constrained-smoke.svg")
+        add_test(
+            NAME polygon_svg_example
+            COMMAND delaunay_polygon_example
+                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/polygon.json"
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-polygon-smoke.svg")
         add_test(
             NAME float_svg_example
             COMMAND delaunay_float_example

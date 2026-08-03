@@ -29,6 +29,10 @@ int main() {
             integer_points, constraints).size() != 4) {
         return 5;
     }
+    if (triangulator.triangulate_polygon_int(
+            integer_points, {0, 1, 2, 3}).size() != 4) {
+        return 6;
+    }
 
     const std::vector<delaunay32::FloatPoint> float_points = {
         {0.0F, 0.0F},

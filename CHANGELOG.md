@@ -11,9 +11,13 @@ Notable changes to Delaunay32 are documented here. The project follows
   constrained Delaunay triangulation of integer point sets with noncrossing
   segments, collinear segment chains, duplicate representatives, and
   constraints meeting at existing sites.
+- `triangulate_polygon_int()`, providing constrained Delaunay triangulation of
+  simple integer polygon domains with multiple holes, automatic winding
+  normalization, boundary chains through existing sites, and domain clipping.
 - A fixed constrained-triangulation comparison example and an extensible,
-  dependency-free example JSON schema for points, constraints, and future
-  polygon rings. Existing CSV example fixtures now use JSON.
+  dependency-free example JSON schema for points, constraints, and polygon
+  rings. A polygon-with-holes SVG example exercises domain filtering. Existing
+  CSV example fixtures now use JSON.
 
 ## 0.4.0 - 2026-08-03
 

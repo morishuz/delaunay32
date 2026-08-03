@@ -40,6 +40,8 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
   input with a `QuantizationReport`
 - [Constrained SVG example](examples/delaunay_constrained_example.cpp):
   ordinary and constrained triangulations of the same fixed geometry
+- [Polygon SVG example](examples/delaunay_polygon_example.cpp): a concave
+  integer domain with three holes and points omitted by domain clipping
 - [Integer SVG example](examples/delaunay_svg_example.cpp): generated or JSON
   integer input
 
@@ -264,9 +266,29 @@ const std::vector<delaunay32::Triangle> triangles =
 
 The result triangulates the full convex hull while preserving every constraint
 as a mesh edge or, when an existing point lies on the segment, as a chain of
-mesh edges. Proper crossings away from an existing point are rejected. This API
-does not clip polygons or remove holes; those operations can be built later on
-top of constrained edges.
+mesh edges. Proper crossings away from an existing point are rejected.
+
+### Polygon input with holes
+
+Polygon rings are indices into the same point vector. The closing edge is
+implicit, although repeating the first index at the end is also accepted:
+
+```cpp
+std::vector<std::uint32_t> outer = {0, 1, 2, 3};
+std::vector<std::vector<std::uint32_t>> holes = {
+    {4, 5, 6, 7},
+};
+
+const std::vector<delaunay32::Triangle> triangles =
+    triangulator.triangulate_polygon_int(points, outer, holes);
+```
+
+The call normalizes ring winding, recovers every boundary as constrained edge
+chains, and returns only triangles inside `outer` and outside every hole.
+Points outside that domain remain valid input but do not appear in the result.
+Rings must be simple and may not cross or touch one another. Holes must be
+strictly inside the outer ring and may not overlap or nest. The implementation
+does not insert intersection or Steiner points.
 
 A `Triangulator` can be reused across calls to retain working storage and worker
 threads. A single instance must not be called concurrently; separate instances
@@ -305,7 +327,9 @@ At a high level, Delaunay32:
 4. merges neighboring triangulations through compact primal edge rings;
 5. optionally recovers constrained segments with in-place edge flips and
    legalizes every unconstrained edge;
-6. marks the outer face and materializes indices that are counterclockwise in
+6. optionally flood-fills polygon exteriors and holes without crossing their
+   constrained boundaries;
+7. marks the outer face and materializes indices that are counterclockwise in
    the triangulation coordinates.
 
 For large inputs, radix sorting, independent subtrees, merge levels, and
@@ -393,6 +417,25 @@ The example code is in
 and its editable point set is
 [`constrained.json`](examples/data/constrained.json).
 
+### Polygon with holes
+
+The polygon example reads indexed outer and hole rings, performs constrained
+Delaunay triangulation and domain filtering, and renders both retained and
+omitted input points. Hollow red points lie inside holes and therefore do not
+appear in any returned triangle.
+
+![Constrained Delaunay triangulation of a polygon with three holes](images/delaunay32_polygon.svg)
+
+```sh
+cmake --build build-debug --target delaunay_polygon_example --parallel
+./build-debug/delaunay_polygon_example \
+  examples/data/polygon.json polygon.svg
+```
+
+The example code is in
+[`delaunay_polygon_example.cpp`](examples/delaunay_polygon_example.cpp), and
+its editable geometry is [`polygon.json`](examples/data/polygon.json).
+
 ### Integer points and JSON input
 
 The dependency-free example accepts arbitrary signed integer points from a
@@ -438,8 +481,9 @@ JSON dependency to the library:
 }
 ```
 
-`constraints` drives the constrained example. `polygon` is reserved for the
-planned polygon-domain example; its rings contain indices into `points`.
+`constraints` drives the constrained example. `polygon.outer` and
+`polygon.holes` contain the point indices accepted by
+`triangulate_polygon_int()`.
 
 ## Development
 
@@ -464,6 +508,7 @@ Included:
 - exact certified predicates
 - deterministic duplicate handling
 - constrained Delaunay edges for integer input
+- constrained Delaunay polygon domains with holes for integer input
 - serial and shared-memory parallel construction
 - triangle indices that are counterclockwise on the triangulation grid
 - up to `2^31 - 1` input entries, subject to available memory
@@ -471,7 +516,7 @@ Included:
 Not included:
 
 - exact predicates on the unquantized floating-point coordinates
-- polygon-domain clipping, holes, or automatic intersection vertices
+- automatic intersection or Steiner vertices
 - dynamic insertion or deletion
 - Voronoi output
 

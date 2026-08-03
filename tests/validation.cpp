@@ -122,6 +122,158 @@ bool point_on_segment(
            points[point].y <= std::max(points[a].y, points[b].y);
 }
 
+bool triangle_centroid_in_ring(
+    const std::vector<Point>& points,
+    const Triangle& triangle,
+    const std::vector<std::uint32_t>& input_ring) {
+    std::vector<std::uint32_t> ring = input_ring;
+    if (ring.size() > 1 && ring.front() == ring.back()) {
+        ring.pop_back();
+    }
+    const std::int64_t x3 =
+        static_cast<std::int64_t>(points[triangle.i0].x) +
+        points[triangle.i1].x + points[triangle.i2].x;
+    const std::int64_t y3 =
+        static_cast<std::int64_t>(points[triangle.i0].y) +
+        points[triangle.i1].y + points[triangle.i2].y;
+    bool inside = false;
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        const Point& a = points[ring[i]];
+        const Point& b = points[ring[(i + 1) % ring.size()]];
+        const std::int64_t ay3 = static_cast<std::int64_t>(a.y) * 3;
+        const std::int64_t by3 = static_cast<std::int64_t>(b.y) * 3;
+        const std::int64_t orientation =
+            (static_cast<std::int64_t>(b.x) - a.x) *
+                (y3 - ay3) -
+            (static_cast<std::int64_t>(b.y) - a.y) *
+                (x3 - static_cast<std::int64_t>(a.x) * 3);
+        if ((ay3 <= y3 && y3 < by3 && orientation > 0) ||
+            (by3 <= y3 && y3 < ay3 && orientation < 0)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+std::int64_t twice_ring_area(
+    const std::vector<Point>& points,
+    const std::vector<std::uint32_t>& input_ring) {
+    std::vector<std::uint32_t> ring = input_ring;
+    if (ring.size() > 1 && ring.front() == ring.back()) {
+        ring.pop_back();
+    }
+    std::int64_t area = 0;
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        const Point& a = points[ring[i]];
+        const Point& b = points[ring[(i + 1) % ring.size()]];
+        area += static_cast<std::int64_t>(a.x) * b.y -
+                static_cast<std::int64_t>(a.y) * b.x;
+    }
+    return area < 0 ? -area : area;
+}
+
+void require_polygon_boundary_chain(
+    const std::vector<Point>& points,
+    const std::unordered_map<std::uint64_t, unsigned>& edges,
+    std::uint32_t start,
+    std::uint32_t finish,
+    const std::string& label) {
+    std::vector<std::vector<std::uint32_t>> adjacency(points.size());
+    for (const auto& entry : edges) {
+        const std::uint32_t a =
+            static_cast<std::uint32_t>(entry.first >> 32U);
+        const std::uint32_t b =
+            static_cast<std::uint32_t>(entry.first);
+        if (point_on_segment(points, a, start, finish) &&
+            point_on_segment(points, b, start, finish)) {
+            adjacency[a].push_back(b);
+            adjacency[b].push_back(a);
+        }
+    }
+    std::vector<std::uint32_t> pending = {start};
+    std::vector<bool> reached(points.size(), false);
+    reached[start] = true;
+    while (!pending.empty()) {
+        const std::uint32_t vertex = pending.back();
+        pending.pop_back();
+        for (const std::uint32_t neighbor : adjacency[vertex]) {
+            if (!reached[neighbor]) {
+                reached[neighbor] = true;
+                pending.push_back(neighbor);
+            }
+        }
+    }
+    require(reached[finish], label + ": polygon boundary chain is missing");
+}
+
+void require_valid_polygon_mesh(
+    const std::vector<Point>& points,
+    const std::vector<Triangle>& triangles,
+    const std::vector<std::uint32_t>& outer,
+    const std::vector<std::vector<std::uint32_t>>& holes,
+    const std::string& label) {
+    std::unordered_map<std::uint64_t, unsigned> edges;
+    edges.reserve(triangles.size() * 2);
+    std::int64_t triangle_area = 0;
+    for (const Triangle& triangle : triangles) {
+        require(
+            triangle.i0 < points.size() &&
+                triangle.i1 < points.size() &&
+                triangle.i2 < points.size(),
+            label + ": triangle index is outside the input");
+        const std::int64_t area = static_cast<std::int64_t>(
+            benchmark_support::orient(
+                points[triangle.i0],
+                points[triangle.i1],
+                points[triangle.i2]));
+        require(area > 0, label + ": triangle is not counterclockwise");
+        triangle_area += area;
+        require(
+            triangle_centroid_in_ring(points, triangle, outer),
+            label + ": triangle lies outside the outer ring");
+        for (const std::vector<std::uint32_t>& hole : holes) {
+            require(
+                !triangle_centroid_in_ring(points, triangle, hole),
+                label + ": triangle lies inside a hole");
+        }
+        const std::array<std::uint32_t, 3> vertices = {
+            triangle.i0, triangle.i1, triangle.i2};
+        for (std::size_t i = 0; i < vertices.size(); ++i) {
+            const std::uint64_t key = benchmark_support::edge_key(
+                vertices[i], vertices[(i + 1) % vertices.size()]);
+            const unsigned count = ++edges[key];
+            require(count <= 2, label + ": mesh has a non-manifold edge");
+        }
+    }
+
+    std::int64_t expected_area = twice_ring_area(points, outer);
+    for (const std::vector<std::uint32_t>& hole : holes) {
+        expected_area -= twice_ring_area(points, hole);
+    }
+    require(
+        triangle_area == expected_area,
+        label + ": triangle area does not match the polygon domain");
+
+    const auto require_ring = [&](const std::vector<std::uint32_t>& input) {
+        std::vector<std::uint32_t> ring = input;
+        if (ring.size() > 1 && ring.front() == ring.back()) {
+            ring.pop_back();
+        }
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            require_polygon_boundary_chain(
+                points,
+                edges,
+                ring[i],
+                ring[(i + 1) % ring.size()],
+                label);
+        }
+    };
+    require_ring(outer);
+    for (const std::vector<std::uint32_t>& hole : holes) {
+        require_ring(hole);
+    }
+}
+
 bool segments_properly_intersect(
     const Point& a,
     const Point& b,
@@ -1226,6 +1378,329 @@ void test_invalid_constraints() {
         "reuse after invalid constrained input");
 }
 
+void test_polygon_outer_domains() {
+    {
+        const std::vector<Point> points = {
+            {0, 0}, {100, 0}, {100, 100}, {0, 100},
+            {20, 20}, {80, 20}, {50, 75},
+            {-40, 50}, {140, 50}, {50, -40}, {50, 140},
+        };
+        const std::vector<std::uint32_t> outer = {0, 3, 2, 1, 0};
+        Triangulator triangulator;
+        const std::vector<Triangle> triangles =
+            triangulator.triangulate_polygon_int(points, outer);
+        require_valid_polygon_mesh(
+            points, triangles, outer, {}, "clockwise square polygon");
+        std::vector<bool> used(points.size(), false);
+        for (const Triangle& triangle : triangles) {
+            used[triangle.i0] = true;
+            used[triangle.i1] = true;
+            used[triangle.i2] = true;
+        }
+        for (std::size_t outside = 7; outside < points.size(); ++outside) {
+            require(
+                !used[outside],
+                "square polygon retained a point outside its domain");
+        }
+    }
+
+    {
+        const std::vector<Point> points = {
+            {0, 0}, {120, 0}, {120, 40},
+            {50, 40}, {50, 120}, {0, 120},
+            {20, 20}, {80, 20}, {20, 80},
+            {80, 80}, {-20, 60},
+        };
+        const std::vector<std::uint32_t> outer = {0, 1, 2, 3, 4, 5};
+        Triangulator triangulator;
+        const std::vector<Triangle> triangles =
+            triangulator.triangulate_polygon_int(points, outer, {});
+        require_valid_polygon_mesh(
+            points, triangles, outer, {}, "concave polygon");
+        for (const Triangle& triangle : triangles) {
+            require(
+                triangle.i0 != 9 && triangle.i1 != 9 && triangle.i2 != 9 &&
+                    triangle.i0 != 10 && triangle.i1 != 10 &&
+                    triangle.i2 != 10,
+                "concave polygon retained an excluded point");
+        }
+    }
+}
+
+void test_polygon_holes_and_boundary_chains() {
+    const std::vector<Point> points = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+        {20, 20}, {40, 20}, {40, 40}, {20, 40},
+        {60, 55}, {85, 55}, {85, 80}, {60, 80},
+        {50, 20}, {50, 85}, {30, 30}, {70, 65},
+        {-20, 50}, {50, 0}, {20, 30},
+    };
+    const std::vector<std::uint32_t> outer = {0, 3, 2, 1, 0};
+    const std::vector<std::vector<std::uint32_t>> holes = {
+        {4, 5, 6, 7},
+        {8, 11, 10, 9, 8},
+    };
+    Triangulator triangulator;
+    const std::vector<Triangle> triangles =
+        triangulator.triangulate_polygon_int(points, outer, holes);
+    require_valid_polygon_mesh(
+        points,
+        triangles,
+        outer,
+        holes,
+        "polygon with two holes and boundary-chain sites");
+
+    std::vector<bool> used(points.size(), false);
+    for (const Triangle& triangle : triangles) {
+        used[triangle.i0] = true;
+        used[triangle.i1] = true;
+        used[triangle.i2] = true;
+    }
+    require(!used[14], "polygon retained a point inside its first hole");
+    require(!used[15], "polygon retained a point inside its second hole");
+    require(!used[16], "polygon retained a point outside its outer ring");
+    require(used[17], "polygon omitted an unlisted outer-boundary point");
+    require(used[18], "polygon omitted an unlisted hole-boundary point");
+}
+
+void test_polygon_duplicate_representatives() {
+    const std::vector<Point> points = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100}, {50, 50},
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+    };
+    Triangulator triangulator;
+    const std::vector<Triangle> expected =
+        triangulator.triangulate_polygon_int(points, {0, 1, 2, 3});
+    const std::vector<Triangle> candidate =
+        triangulator.triangulate_polygon_int(points, {5, 6, 7, 8, 5});
+    require(
+        benchmark_support::meshes_equal(expected, candidate),
+        "polygon ring indices did not resolve to duplicate representatives");
+}
+
+void test_polygon_radial_cases() {
+    constexpr double pi = 3.14159265358979323846;
+    for (std::uint64_t seed = 0; seed < 120; ++seed) {
+        const std::size_t outer_size = 8 + seed % 13;
+        const std::size_t hole_size = 5 + seed % 7;
+        std::vector<Point> points;
+        std::vector<std::uint32_t> outer;
+        std::vector<std::uint32_t> hole;
+        points.reserve(outer_size + hole_size + 40);
+        for (std::size_t i = 0; i < outer_size; ++i) {
+            const double angle =
+                2.0 * pi * static_cast<double>(i) /
+                static_cast<double>(outer_size);
+            const double radius =
+                700.0 + static_cast<double>((i * 97 + seed * 31) % 180);
+            outer.push_back(static_cast<std::uint32_t>(points.size()));
+            points.push_back({
+                static_cast<std::int32_t>(
+                    std::llround(radius * std::cos(angle))),
+                static_cast<std::int32_t>(
+                    std::llround(radius * std::sin(angle))),
+            });
+        }
+        for (std::size_t i = 0; i < hole_size; ++i) {
+            const double angle =
+                2.0 * pi * static_cast<double>(i) /
+                static_cast<double>(hole_size);
+            const double radius =
+                130.0 + static_cast<double>((i * 41 + seed * 17) % 45);
+            hole.push_back(static_cast<std::uint32_t>(points.size()));
+            points.push_back({
+                static_cast<std::int32_t>(
+                    std::llround(70.0 + radius * std::cos(angle))),
+                static_cast<std::int32_t>(
+                    std::llround(-40.0 + radius * std::sin(angle))),
+            });
+        }
+        std::vector<Point> background =
+            benchmark_support::generate_points(
+                Dataset::Uniform, 40, 0xB01700ULL + seed, 2200);
+        for (Point& point : background) {
+            point.x -= 1100;
+            point.y -= 1100;
+        }
+        points.insert(points.end(), background.begin(), background.end());
+
+        if (seed % 2 == 0) {
+            std::reverse(outer.begin(), outer.end());
+        }
+        if (seed % 3 == 0) {
+            std::reverse(hole.begin(), hole.end());
+        }
+        if (seed % 5 == 0) {
+            outer.push_back(outer.front());
+            hole.push_back(hole.front());
+        }
+        const std::vector<std::vector<std::uint32_t>> holes = {hole};
+        Triangulator triangulator(seed % 2 == 0 ? 1 : 2);
+        const std::vector<Triangle> triangles =
+            triangulator.triangulate_polygon_int(points, outer, holes);
+        require_valid_polygon_mesh(
+            points,
+            triangles,
+            outer,
+            holes,
+            "radial polygon case " + std::to_string(seed));
+    }
+}
+
+void test_parallel_polygon() {
+    constexpr std::int32_t width = 250;
+    constexpr std::int32_t height = 200;
+    std::vector<Point> points;
+    points.reserve(static_cast<std::size_t>(width * height));
+    for (std::int32_t y = 0; y < height; ++y) {
+        for (std::int32_t x = 0; x < width; ++x) {
+            points.push_back({x, y});
+        }
+    }
+    const auto index = [](std::int32_t x, std::int32_t y) {
+        return static_cast<std::uint32_t>(y * width + x);
+    };
+    const std::vector<std::uint32_t> outer = {
+        index(0, 0),
+        index(width - 1, 0),
+        index(width - 1, height - 1),
+        index(0, height - 1),
+    };
+    const std::vector<std::vector<std::uint32_t>> holes = {{
+        index(80, 70),
+        index(170, 70),
+        index(170, 130),
+        index(80, 130),
+    }};
+
+    Triangulator serial(1);
+    Triangulator parallel(4);
+    const std::vector<Triangle> expected =
+        serial.triangulate_polygon_int(points, outer, holes);
+    const std::vector<Triangle> candidate =
+        parallel.triangulate_polygon_int(points, outer, holes);
+    require(
+        benchmark_support::meshes_equal(expected, candidate),
+        "polygon serial and parallel triangle sets differ");
+    require_valid_polygon_mesh(
+        points, candidate, outer, holes, "parallel polygon grid");
+}
+
+void test_invalid_polygons() {
+    const std::vector<Point> square = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+        {25, 25}, {75, 25}, {75, 75}, {25, 75},
+        {35, 35}, {65, 35}, {65, 65}, {35, 65},
+        {-20, 20}, {-5, 20}, {-5, 40}, {-20, 40},
+    };
+    Triangulator triangulator;
+    require_invalid(
+        [&] { triangulator.triangulate_polygon_int(square, {0, 1}); },
+        "polygon ring with fewer than three indices");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(square, {0, 1, 16});
+        },
+        "polygon ring index outside the point array");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(square, {0, 1, 2, 1, 3});
+        },
+        "polygon ring with a repeated coordinate");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(square, {0, 2, 1, 3});
+        },
+        "self-intersecting polygon ring");
+
+    const std::vector<Point> backtracking = {
+        {0, 0}, {100, 0}, {50, 0}, {0, 100},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                backtracking, {0, 1, 2, 3});
+        },
+        "polygon ring with overlapping adjacent edges");
+
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                square, {0, 1, 2, 3}, {{12, 13, 14, 15}});
+        },
+        "hole outside the polygon");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                square, {0, 1, 2, 3}, {{0, 4, 5}});
+        },
+        "hole touching the outer ring");
+
+    const std::vector<Point> crossing_outer = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+        {-10, 25}, {25, 25}, {25, 75}, {-10, 75},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                crossing_outer, {0, 1, 2, 3}, {{4, 5, 6, 7}});
+        },
+        "hole crossing the outer ring");
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                square, {0, 1, 2, 3}, {{4, 5, 6, 7}, {8, 9, 10, 11}});
+        },
+        "nested polygon holes");
+
+    const std::vector<Point> touching_holes = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+        {10, 10}, {50, 10}, {50, 50}, {10, 50},
+        {50, 20}, {80, 20}, {80, 60}, {50, 60},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                touching_holes,
+                {0, 1, 2, 3},
+                {{4, 5, 6, 7}, {8, 9, 10, 11}});
+        },
+        "touching polygon holes");
+
+    const std::vector<Point> crossing_holes = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100},
+        {10, 10}, {60, 10}, {60, 60}, {10, 60},
+        {40, 40}, {80, 40}, {80, 80}, {40, 80},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                crossing_holes,
+                {0, 1, 2, 3},
+                {{4, 5, 6, 7}, {8, 9, 10, 11}});
+        },
+        "crossing polygon holes");
+
+    const std::vector<Point> duplicate_coordinate = {
+        {0, 0}, {100, 0}, {100, 100}, {0, 100}, {100, 0},
+    };
+    require_invalid(
+        [&] {
+            triangulator.triangulate_polygon_int(
+                duplicate_coordinate, {0, 1, 2, 4, 3});
+        },
+        "ring repeating a duplicate representative");
+
+    const std::vector<Triangle> recovered =
+        triangulator.triangulate_polygon_int(square, {0, 1, 2, 3});
+    require_valid_polygon_mesh(
+        square,
+        recovered,
+        {0, 1, 2, 3},
+        {},
+        "reuse after invalid polygon input");
+}
+
 void test_invalid_inputs() {
     Triangulator triangulator;
     const std::vector<FloatPoint> valid_float_triangle = {
@@ -1362,11 +1837,17 @@ int main() {
         delaunay32::test_collinear_constrained_input();
         delaunay32::test_parallel_constraints();
         delaunay32::test_invalid_constraints();
+        delaunay32::test_polygon_outer_domains();
+        delaunay32::test_polygon_holes_and_boundary_chains();
+        delaunay32::test_polygon_duplicate_representatives();
+        delaunay32::test_polygon_radial_cases();
+        delaunay32::test_parallel_polygon();
+        delaunay32::test_invalid_polygons();
         delaunay32::test_invalid_inputs();
         std::cout
             << "validation passed: deterministic, duplicate, collinear, "
                "integer/float/full API, quantization options, "
-               "predicate-width, constrained, and parallel cases\n";
+               "predicate-width, constrained, polygon, and parallel cases\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "validation failed: " << error.what() << '\n';

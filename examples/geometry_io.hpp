@@ -12,8 +12,8 @@
 namespace delaunay32_example {
 
 // The example JSON schema keeps coordinates separate from topology so the
-// same fixture can describe ordinary points, constrained edges, and future
-// polygon rings without changing point indices.
+// same fixture can describe ordinary points, constrained edges, and polygon
+// rings without changing point indices.
 struct GeometryInput {
     std::vector<delaunay32::Point> points;
     std::vector<delaunay32::Constraint> constraints;

@@ -160,6 +160,16 @@ public:
         const std::vector<Point>& points,
         const std::vector<Constraint>& constraints);
 
+    // Constructs a constrained Delaunay triangulation of a polygonal domain.
+    // Rings contain indices into points; their closing edge is implicit and a
+    // repeated first index at the end is optional. Ring winding is normalized
+    // internally. Rings must be simple, mutually disjoint, and non-touching;
+    // holes must lie strictly inside the outer ring.
+    std::vector<Triangle> triangulate_polygon_int(
+        const std::vector<Point>& points,
+        const std::vector<std::uint32_t>& outer_ring,
+        const std::vector<std::vector<std::uint32_t>>& holes = {});
+
     // Uniformly quantizes finite floating-point coordinates. The returned
     // indices still reference the original input; only topology decisions use
     // the quantized coordinates.
@@ -395,6 +405,14 @@ private:
         std::uint32_t a,
         std::uint32_t b) const;
     void legalize_unconstrained_edges();
+    std::vector<std::vector<std::uint32_t>> prepare_polygon_rings(
+        const std::vector<std::uint32_t>& outer_ring,
+        const std::vector<std::vector<std::uint32_t>>& holes) const;
+    std::uint32_t first_boundary_edge(
+        std::uint32_t origin,
+        std::uint32_t destination) const;
+    void mark_polygon_excluded_faces(
+        const std::vector<std::vector<std::uint32_t>>& rings);
     void export_triangles();
     void export_triangles_parallel(
         std::size_t thread_count,
