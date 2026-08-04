@@ -1,135 +1,33 @@
 // SPDX-License-Identifier: MIT
 
-#include "geometry_io.hpp"
+#include "delaunay32/extras/json.hpp"
+#include "internal.hpp"
 
-#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <fstream>
-#include <iostream>
 #include <iterator>
 #include <limits>
-#include <random>
+#include <ostream>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-namespace delaunay32_example {
+namespace delaunay32::extras {
 namespace {
 
-using delaunay32::Constraint;
-using delaunay32::Point;
-
-constexpr std::int32_t kDomainMaximum = 999;
-constexpr std::size_t kInteriorCapacity =
-    static_cast<std::size_t>(kDomainMaximum - 1) *
-    static_cast<std::size_t>(kDomainMaximum - 1);
-constexpr std::size_t kMaximumPoints = kInteriorCapacity + 4;
-
-std::uint64_t point_key(const Point& point) {
-    return (static_cast<std::uint64_t>(
-                static_cast<std::uint32_t>(point.x))
-            << 32U) |
-           static_cast<std::uint32_t>(point.y);
-}
-
-std::int64_t orient(const Point& a, const Point& b, const Point& point) {
-    return (static_cast<std::int64_t>(b.x) - a.x) *
-               (static_cast<std::int64_t>(point.y) - a.y) -
-           (static_cast<std::int64_t>(b.y) - a.y) *
-               (static_cast<std::int64_t>(point.x) - a.x);
-}
-
-bool point_on_segment(const Point& point, const Point& a, const Point& b) {
-    if (orient(a, b, point) != 0) {
-        return false;
-    }
-    return point.x >= std::min(a.x, b.x) &&
-           point.x <= std::max(a.x, b.x) &&
-           point.y >= std::min(a.y, b.y) &&
-           point.y <= std::max(a.y, b.y);
-}
-
-enum class RingLocation {
-    outside,
-    inside,
-    boundary,
-};
-
-RingLocation locate_in_ring(
-    const Point& point,
-    const std::vector<std::uint32_t>& ring,
-    const std::vector<Point>& points) {
-    bool inside = false;
-    for (std::size_t i = 0; i < ring.size(); ++i) {
-        const Point& a = points[ring[i]];
-        const Point& b = points[ring[(i + 1) % ring.size()]];
-        if (point_on_segment(point, a, b)) {
-            return RingLocation::boundary;
-        }
-        if ((a.y > point.y) == (b.y > point.y)) {
-            continue;
-        }
-        const long double intersection_x =
-            static_cast<long double>(a.x) +
-            (static_cast<long double>(point.y) - a.y) *
-                (static_cast<long double>(b.x) - a.x) /
-                (static_cast<long double>(b.y) - a.y);
-        if (static_cast<long double>(point.x) < intersection_x) {
-            inside = !inside;
-        }
-    }
-    return inside ? RingLocation::inside : RingLocation::outside;
-}
-
-std::vector<Point> generate_points(
-    std::size_t point_count,
-    std::uint64_t seed) {
-    if (point_count < 4 || point_count > kMaximumPoints) {
-        throw std::invalid_argument(
-            "point count must be between 4 and " +
-            std::to_string(kMaximumPoints));
-    }
-
-    std::vector<Point> points = {
-        {0, 0},
-        {kDomainMaximum, 0},
-        {kDomainMaximum, kDomainMaximum},
-        {0, kDomainMaximum},
-    };
-    points.reserve(point_count);
-
-    std::unordered_set<std::uint64_t> occupied;
-    occupied.reserve(point_count * 2);
-    for (const Point& point : points) {
-        occupied.insert(point_key(point));
-    }
-
-    std::mt19937_64 random(seed);
-    std::uniform_int_distribution<std::int32_t> coordinate(
-        1, kDomainMaximum - 1);
-    while (points.size() < point_count) {
-        const Point point = {coordinate(random), coordinate(random)};
-        if (occupied.insert(point_key(point)).second) {
-            points.push_back(point);
-        }
-    }
-    return points;
-}
+void validate_geometry(const Geometry& geometry);
 
 class GeometryJsonParser {
 public:
-    GeometryJsonParser(
-        const std::string& text,
-        const std::string& input_path)
-        : text_(text), input_path_(input_path) {}
+    GeometryJsonParser(const std::string& text, std::string input_path)
+        : text_(text), input_path_(std::move(input_path)) {}
 
-    GeometryInput parse() {
-        GeometryInput geometry;
+    Geometry parse() {
+        Geometry geometry;
         bool have_points = false;
         bool have_constraints = false;
         bool have_polygon = false;
@@ -141,27 +39,19 @@ public:
                 const std::string key = parse_string();
                 expect(':');
                 if (key == "points") {
-                    if (have_points) {
-                        fail("duplicate points field");
-                    }
+                    reject_duplicate(have_points, "points");
                     geometry.points = parse_points();
                     have_points = true;
                 } else if (key == "constraints") {
-                    if (have_constraints) {
-                        fail("duplicate constraints field");
-                    }
+                    reject_duplicate(have_constraints, "constraints");
                     geometry.constraints = parse_constraints();
                     have_constraints = true;
                 } else if (key == "polygon") {
-                    if (have_polygon) {
-                        fail("duplicate polygon field");
-                    }
-                    parse_polygon(geometry);
+                    reject_duplicate(have_polygon, "polygon");
+                    geometry.polygon = parse_polygon_domain();
                     have_polygon = true;
                 } else if (key == "polygons") {
-                    if (have_polygons) {
-                        fail("duplicate polygons field");
-                    }
+                    reject_duplicate(have_polygons, "polygons");
                     geometry.polygons = parse_polygons();
                     have_polygons = true;
                 } else {
@@ -183,13 +73,20 @@ public:
         if (have_polygon && have_polygons) {
             fail("polygon and polygons cannot both be present");
         }
-        validate(geometry, have_polygon, have_polygons);
+        if (have_polygons && geometry.polygons.empty()) {
+            fail("polygons must contain at least one domain");
+        }
+        try {
+            ::delaunay32::extras::validate_geometry(geometry);
+        } catch (const std::invalid_argument& error) {
+            fail(error.what());
+        }
         return geometry;
     }
 
 private:
     const std::string& text_;
-    const std::string& input_path_;
+    std::string input_path_;
     std::size_t position_ = 0;
 
     [[noreturn]] void fail(const std::string& message) const {
@@ -206,6 +103,12 @@ private:
         throw std::invalid_argument(
             input_path_ + ":" + std::to_string(line) + ":" +
             std::to_string(column) + ": " + message);
+    }
+
+    void reject_duplicate(bool present, const std::string& field) const {
+        if (present) {
+            fail("duplicate " + field + " field");
+        }
     }
 
     void skip_whitespace() {
@@ -299,9 +202,8 @@ private:
                         if (value_digit < 0) {
                             fail("invalid Unicode escape");
                         }
-                        code_point =
-                            code_point * 16U +
-                            static_cast<unsigned>(value_digit);
+                        code_point = code_point * 16U +
+                                     static_cast<unsigned>(value_digit);
                     }
                     if (code_point > 0x7fU) {
                         fail("non-ASCII field name is not supported");
@@ -460,15 +362,11 @@ private:
                 const std::string key = parse_string();
                 expect(':');
                 if (key == "outer") {
-                    if (have_outer) {
-                        fail("duplicate polygon outer field");
-                    }
+                    reject_duplicate(have_outer, "polygon outer");
                     domain.outer_ring = parse_ring();
                     have_outer = true;
                 } else if (key == "holes") {
-                    if (have_holes) {
-                        fail("duplicate polygon holes field");
-                    }
+                    reject_duplicate(have_holes, "polygon holes");
                     domain.holes = parse_holes();
                     have_holes = true;
                 } else {
@@ -486,12 +384,6 @@ private:
         return domain;
     }
 
-    void parse_polygon(GeometryInput& geometry) {
-        PolygonDomain domain = parse_polygon_domain();
-        geometry.outer_ring = std::move(domain.outer_ring);
-        geometry.holes = std::move(domain.holes);
-    }
-
     std::vector<PolygonDomain> parse_polygons() {
         std::vector<PolygonDomain> polygons;
         expect('[');
@@ -507,162 +399,75 @@ private:
         }
     }
 
-    void validate_ring(
-        const std::vector<std::uint32_t>& ring,
-        std::size_t point_count,
-        const std::string& label) const {
-        if (ring.size() < 3) {
-            fail(label + " must contain at least three indices");
-        }
-        for (const std::uint32_t index : ring) {
-            if (index >= point_count) {
-                fail(label + " index is outside the points array");
-            }
-        }
-    }
-
-    void validate(
-        const GeometryInput& geometry,
-        bool have_polygon,
-        bool have_polygons) const {
-        if (geometry.points.size() < 3) {
-            fail("points must contain at least three entries");
-        }
-        if (geometry.points.size() >
-            static_cast<std::size_t>(
-                std::numeric_limits<std::uint32_t>::max() >> 1U)) {
-            fail("points contains too many entries");
-        }
-        for (const Constraint constraint : geometry.constraints) {
-            if (constraint.i0 >= geometry.points.size() ||
-                constraint.i1 >= geometry.points.size()) {
-                fail("constraint index is outside the points array");
-            }
-            if (constraint.i0 == constraint.i1) {
-                fail("constraint endpoints must use different indices");
-            }
-        }
-        if (have_polygon) {
-            validate_ring(
-                geometry.outer_ring,
-                geometry.points.size(),
-                "polygon outer ring");
-            for (std::size_t i = 0; i < geometry.holes.size(); ++i) {
-                validate_ring(
-                    geometry.holes[i],
-                    geometry.points.size(),
-                    "polygon hole " + std::to_string(i));
-            }
-        }
-        if (have_polygons) {
-            if (geometry.polygons.empty()) {
-                fail("polygons must contain at least one domain");
-            }
-            for (std::size_t polygon = 0;
-                 polygon < geometry.polygons.size();
-                 ++polygon) {
-                const PolygonDomain& domain = geometry.polygons[polygon];
-                validate_ring(
-                    domain.outer_ring,
-                    geometry.points.size(),
-                    "polygons domain " + std::to_string(polygon) +
-                        " outer ring");
-                for (std::size_t hole = 0;
-                     hole < domain.holes.size();
-                     ++hole) {
-                    validate_ring(
-                        domain.holes[hole],
-                        geometry.points.size(),
-                        "polygons domain " + std::to_string(polygon) +
-                            " hole " + std::to_string(hole));
-                }
-            }
-        }
-    }
 };
 
-std::size_t parse_point_count(const char* value) {
-    std::size_t consumed = 0;
-    const std::string text = value;
-    const unsigned long long parsed = std::stoull(text, &consumed);
-    if (consumed != text.size()) {
-        throw std::invalid_argument("point count is not an integer");
+void validate_geometry(const Geometry& geometry) {
+    if (geometry.points.size() < 3) {
+        throw std::invalid_argument(
+            "points must contain at least three entries");
     }
-    if (parsed > std::numeric_limits<std::size_t>::max()) {
-        throw std::invalid_argument("point count is too large");
+    if (geometry.points.size() >
+        static_cast<std::size_t>(
+            std::numeric_limits<std::uint32_t>::max() >> 1U)) {
+        throw std::invalid_argument("points contains too many entries");
     }
-    return static_cast<std::size_t>(parsed);
+    for (const Constraint constraint : geometry.constraints) {
+        if (constraint.i0 >= geometry.points.size() ||
+            constraint.i1 >= geometry.points.size()) {
+            throw std::invalid_argument(
+                "constraint index is outside the points array");
+        }
+        if (constraint.i0 == constraint.i1) {
+            throw std::invalid_argument(
+                "constraint endpoints must use different indices");
+        }
+    }
+    if (geometry.polygon.has_value() && !geometry.polygons.empty()) {
+        throw std::invalid_argument(
+            "polygon and polygons cannot both be present");
+    }
+    if (geometry.polygon.has_value()) {
+        detail::validate_domain(
+            *geometry.polygon, geometry.points.size(), "polygon");
+    }
+    for (std::size_t i = 0; i < geometry.polygons.size(); ++i) {
+        detail::validate_domain(
+            geometry.polygons[i],
+            geometry.points.size(),
+            "polygons domain " + std::to_string(i));
+    }
 }
 
-std::uint64_t parse_seed(const char* value) {
-    std::size_t consumed = 0;
-    const std::string text = value;
-    const std::uint64_t seed = std::stoull(text, &consumed);
-    if (consumed != text.size()) {
-        throw std::invalid_argument("seed is not an integer");
+void write_ring(
+    std::ostream& output,
+    const std::vector<std::uint32_t>& ring) {
+    output << '[';
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        output << (i == 0 ? "" : ", ") << ring[i];
     }
-    return seed;
+    output << ']';
+}
+
+void write_domain(
+    std::ostream& output,
+    const PolygonDomain& domain,
+    const std::string& indent) {
+    output << "{\n" << indent << "  \"outer\": ";
+    write_ring(output, domain.outer_ring);
+    if (!domain.holes.empty()) {
+        output << ",\n" << indent << "  \"holes\": [";
+        for (std::size_t i = 0; i < domain.holes.size(); ++i) {
+            output << (i == 0 ? "\n" : ",\n") << indent << "    ";
+            write_ring(output, domain.holes[i]);
+        }
+        output << '\n' << indent << "  ]";
+    }
+    output << '\n' << indent << '}';
 }
 
 }  // namespace
 
-bool point_is_strictly_inside_domain(
-    const Point& point,
-    const PolygonDomain& domain,
-    const std::vector<Point>& points) {
-    if (locate_in_ring(point, domain.outer_ring, points) !=
-        RingLocation::inside) {
-        return false;
-    }
-    for (const std::vector<std::uint32_t>& hole : domain.holes) {
-        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
-            return false;
-        }
-    }
-    return true;
-}
-
-Options parse_options(int argc, char** argv) {
-    Options options;
-    if (argc >= 2 && std::string(argv[1]) == "--input") {
-        options.input_mode = true;
-        for (int i = 1; i < argc; ++i) {
-            const std::string argument = argv[i];
-            if (argument == "--input" && i + 1 < argc) {
-                options.input_path = argv[++i];
-            } else if (argument == "--output" && i + 1 < argc) {
-                options.output_path = argv[++i];
-            } else {
-                throw std::invalid_argument(
-                    "unknown or incomplete option: " + argument);
-            }
-        }
-        if (options.input_path.empty()) {
-            throw std::invalid_argument("--input requires a JSON path");
-        }
-        return options;
-    }
-
-    if (argc > 4) {
-        throw std::invalid_argument("too many positional arguments");
-    }
-    options.point_count =
-        argc >= 2 ? parse_point_count(argv[1]) : 1000;
-    options.output_path = argc >= 3 ? argv[2] : "mesh.svg";
-    options.seed = argc >= 4 ? parse_seed(argv[3]) : 1;
-    return options;
-}
-
-void print_usage(const char* executable) {
-    std::cerr
-        << "Usage:\n"
-        << "  " << executable
-        << " [point-count] [output.svg] [seed]\n"
-        << "  " << executable
-        << " --input geometry.json [--output output.svg]\n";
-}
-
-GeometryInput read_geometry_json(const std::string& input_path) {
+Geometry read_geometry_json(const std::string& input_path) {
     std::ifstream input(input_path, std::ios::binary);
     if (!input) {
         throw std::runtime_error("could not open JSON: " + input_path);
@@ -677,13 +482,50 @@ GeometryInput read_geometry_json(const std::string& input_path) {
     return GeometryJsonParser(text, input_path).parse();
 }
 
-GeometryInput load_geometry(const Options& options) {
-    if (options.input_mode) {
-        return read_geometry_json(options.input_path);
+void write_geometry_json(
+    const std::string& output_path,
+    const Geometry& geometry) {
+    validate_geometry(geometry);
+    std::ofstream output(output_path, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("could not create JSON: " + output_path);
     }
-    GeometryInput geometry;
-    geometry.points = generate_points(options.point_count, options.seed);
-    return geometry;
+
+    output << "{\n  \"points\": [";
+    for (std::size_t i = 0; i < geometry.points.size(); ++i) {
+        const Point& point = geometry.points[i];
+        output << (i == 0 ? "\n" : ",\n")
+               << "    [" << point.x << ", " << point.y << ']';
+    }
+    output << "\n  ]";
+
+    if (!geometry.constraints.empty()) {
+        output << ",\n  \"constraints\": [";
+        for (std::size_t i = 0; i < geometry.constraints.size(); ++i) {
+            const Constraint constraint = geometry.constraints[i];
+            output << (i == 0 ? "\n" : ",\n")
+                   << "    [" << constraint.i0 << ", "
+                   << constraint.i1 << ']';
+        }
+        output << "\n  ]";
+    }
+    if (geometry.polygon.has_value()) {
+        output << ",\n  \"polygon\": ";
+        write_domain(output, *geometry.polygon, "  ");
+    }
+    if (!geometry.polygons.empty()) {
+        output << ",\n  \"polygons\": [";
+        for (std::size_t i = 0; i < geometry.polygons.size(); ++i) {
+            output << (i == 0 ? "\n    " : ",\n    ");
+            write_domain(output, geometry.polygons[i], "    ");
+        }
+        output << "\n  ]";
+    }
+    output << "\n}\n";
+    if (!output) {
+        throw std::runtime_error(
+            "failed while writing JSON: " + output_path);
+    }
 }
 
-}  // namespace delaunay32_example
+}  // namespace delaunay32::extras

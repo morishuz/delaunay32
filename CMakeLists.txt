@@ -20,6 +20,10 @@ option(
     "Build the dependency-free SVG examples"
     ${DELAUNAY32_TOP_LEVEL})
 option(
+    DELAUNAY32_BUILD_EXTRAS
+    "Build the optional sampling, geometry JSON, and SVG companion library"
+    ON)
+option(
     DELAUNAY32_BUILD_TESTS
     "Build the validation suite"
     ${DELAUNAY32_TOP_LEVEL})
@@ -67,16 +71,42 @@ target_include_directories(delaunay32
 target_link_libraries(delaunay32 PUBLIC Threads::Threads)
 delaunay32_enable_warnings(delaunay32)
 
-if(DELAUNAY32_BUILD_EXAMPLES)
+if(DELAUNAY32_BUILD_EXTRAS)
     add_library(
-        delaunay32_example_support STATIC
-        examples/geometry_io.cpp
-        examples/geometry_io.hpp
-        examples/svg_io.cpp
-        examples/svg_io.hpp
+        delaunay32_extras
+        extras/geometry.cpp
+        extras/internal.hpp
+        extras/json.cpp
+        extras/sampling.cpp
+        extras/svg.cpp
+    )
+    add_library(delaunay32::extras ALIAS delaunay32_extras)
+    set_target_properties(delaunay32_extras PROPERTIES EXPORT_NAME extras)
+    target_compile_features(delaunay32_extras PUBLIC cxx_std_17)
+    target_include_directories(delaunay32_extras
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     target_link_libraries(
-        delaunay32_example_support PUBLIC delaunay32::delaunay32)
+        delaunay32_extras PUBLIC delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay32_extras)
+endif()
+
+if(DELAUNAY32_BUILD_EXAMPLES)
+    if(NOT DELAUNAY32_BUILD_EXTRAS)
+        message(FATAL_ERROR
+            "DELAUNAY32_BUILD_EXAMPLES requires DELAUNAY32_BUILD_EXTRAS")
+    endif()
+    add_library(
+        delaunay32_example_support STATIC
+        examples/example_cli.cpp
+        examples/example_cli.hpp
+        examples/presentation_svg.cpp
+        examples/presentation_svg.hpp
+    )
+    target_link_libraries(
+        delaunay32_example_support PUBLIC delaunay32::extras)
     delaunay32_enable_warnings(delaunay32_example_support)
 
     add_executable(
@@ -161,6 +191,21 @@ if(DELAUNAY32_BUILD_TESTS)
         PRIVATE delaunay32::delaunay32 delaunator_baseline)
     delaunay32_enable_warnings(delaunay_tests)
     add_test(NAME validation COMMAND delaunay_tests)
+
+    if(DELAUNAY32_BUILD_EXTRAS)
+        add_executable(
+            delaunay_extras_tests
+            tests/extras_validation.cpp)
+        target_link_libraries(
+            delaunay_extras_tests PRIVATE delaunay32::extras)
+        delaunay32_enable_warnings(delaunay_extras_tests)
+        add_test(
+            NAME extras_validation
+            COMMAND delaunay_extras_tests
+                    "${CMAKE_CURRENT_BINARY_DIR}/extras-roundtrip.json"
+                    "${CMAKE_CURRENT_BINARY_DIR}/extras-mesh.svg"
+                    "${CMAKE_CURRENT_BINARY_DIR}/extras-polygon.svg")
+    endif()
 
     add_executable(
         delaunay_stress_tests
@@ -248,17 +293,27 @@ if(DELAUNAY32_BUILD_TESTS)
     endif()
 endif()
 
+set(DELAUNAY32_INSTALL_TARGETS delaunay32)
+if(DELAUNAY32_BUILD_EXTRAS)
+    list(APPEND DELAUNAY32_INSTALL_TARGETS delaunay32_extras)
+endif()
 install(
-    TARGETS delaunay32
+    TARGETS ${DELAUNAY32_INSTALL_TARGETS}
     EXPORT delaunay32Targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(
-    DIRECTORY include/delaunay32
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES include/delaunay32/delaunay.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/delaunay32
 )
+if(DELAUNAY32_BUILD_EXTRAS)
+    install(
+        DIRECTORY include/delaunay32/extras
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/delaunay32
+    )
+endif()
 install(
     EXPORT delaunay32Targets
     FILE delaunay32Targets.cmake

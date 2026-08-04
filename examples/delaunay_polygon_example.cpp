@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "delaunay32/delaunay.hpp"
-#include "geometry_io.hpp"
-#include "svg_io.hpp"
+#include "delaunay32/extras/json.hpp"
+#include "delaunay32/extras/svg.hpp"
 
 #include <exception>
 #include <iostream>
@@ -19,9 +19,9 @@ int main(int argc, char** argv) {
         const std::string input_path = argv[1];
         const std::string output_path =
             argc == 3 ? argv[2] : "delaunay32_polygon.svg";
-        const delaunay32_example::GeometryInput geometry =
-            delaunay32_example::read_geometry_json(input_path);
-        if (geometry.outer_ring.empty()) {
+        const delaunay32::extras::Geometry geometry =
+            delaunay32::extras::read_geometry_json(input_path);
+        if (!geometry.polygon.has_value()) {
             throw std::invalid_argument(
                 "polygon example requires polygon.outer");
         }
@@ -34,17 +34,16 @@ int main(int argc, char** argv) {
         const std::vector<delaunay32::Triangle> triangles =
             triangulator.triangulate_polygon_int(
                 geometry.points,
-                geometry.outer_ring,
-                geometry.holes);
-        delaunay32_example::write_polygon_svg(
+                geometry.polygon->outer_ring,
+                geometry.polygon->holes);
+        delaunay32::extras::write_polygon_mesh_svg(
             output_path,
             geometry.points,
-            geometry.outer_ring,
-            geometry.holes,
+            *geometry.polygon,
             triangles);
         std::cout << "wrote " << output_path << ": "
                   << geometry.points.size() << " points, "
-                  << geometry.holes.size() << " holes, "
+                  << geometry.polygon->holes.size() << " holes, "
                   << triangles.size() << " domain triangles\n";
         return 0;
     } catch (const std::exception& error) {

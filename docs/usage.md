@@ -45,7 +45,8 @@ the precise Delaunay edge set of the original values.
 
 ## Public types
 
-All public types are in the `delaunay32` namespace.
+Core public types are in the `delaunay32` namespace. Optional companion types
+are in `delaunay32::extras` and are documented separately below.
 
 ### `Point`
 
@@ -470,6 +471,120 @@ visualization, and general meshing applications these differences are
 negligible. Use an adaptive-exact triangulator when the precise Delaunay edge
 set of the source coordinates is a requirement.
 
+## Optional extras companion library
+
+The installed `delaunay32::extras` CMake target provides reusable support for
+examples, fixtures, small tools, and visualizations. It links to
+`delaunay32::delaunay32`; the core library never links to extras, so applications
+that use only triangulation do not pull in JSON, sampling, or SVG code.
+
+```cmake
+find_package(delaunay32 CONFIG REQUIRED)
+target_link_libraries(my_tool PRIVATE delaunay32::extras)
+```
+
+The companion is built by default. Configure with
+`-DDELAUNAY32_BUILD_EXTRAS=OFF` to omit it. Building the repository's examples
+requires extras.
+
+### Geometry and polygon-domain types
+
+Include `<delaunay32/extras/geometry.hpp>` for:
+
+```cpp
+namespace delaunay32::extras {
+
+struct PolygonDomain {
+    std::vector<std::uint32_t> outer_ring;
+    std::vector<std::vector<std::uint32_t>> holes;
+};
+
+struct Geometry {
+    std::vector<Point> points;
+    std::vector<Constraint> constraints;
+    std::optional<PolygonDomain> polygon;
+    std::vector<PolygonDomain> polygons;
+};
+
+}
+```
+
+Every ring stores indices into `Geometry::points`; its closing edge is
+implicit. `point_is_strictly_inside_domain()` performs an exact signed-integer
+domain query and returns false on outer and hole boundaries. Invalid indices or
+rings with fewer than three entries throw `std::invalid_argument`.
+
+### Delaunay32 geometry JSON
+
+`<delaunay32/extras/json.hpp>` reads and writes the repository's geometry
+schema:
+
+```cpp
+const delaunay32::extras::Geometry geometry =
+    delaunay32::extras::read_geometry_json("geometry.json");
+
+delaunay32::extras::write_geometry_json("copy.json", geometry);
+```
+
+The top-level object requires `points` and may contain `constraints`, one
+`polygon`, or a `polygons` array. Coordinates must be signed 32-bit integers;
+constraint and ring entries must be valid unsigned point indices. `polygon`
+and `polygons` are mutually exclusive.
+
+This is intentionally a schema-specific, dependency-free reader and writer.
+It rejects unknown fields and does not expose general JSON values, parsing, or
+serialization.
+
+### Uniform and blue-noise-style sampling
+
+`<delaunay32/extras/sampling.hpp>` supplies unique integer samples and direct
+float samples in caller-selected bounds:
+
+```cpp
+delaunay32::extras::UniformIntOptions options;
+options.point_count = 100000;
+options.bounds = {-5000, 5000, -2000, 8000};
+options.seed = 42;
+options.include_corners = true;
+
+const std::vector<delaunay32::Point> points =
+    delaunay32::extras::generate_uniform_int_points(options);
+```
+
+`point_count` includes the distinct corners when `include_corners` is true.
+Integer samples never repeat. `generate_uniform_float_points()` has the same
+shape with `FloatBounds` and `UniformFloatOptions`.
+
+For polygon domains, the best-candidate sampler chooses each new point by
+maximizing its distance from the boundary and previously accepted points in
+the same domain:
+
+```cpp
+delaunay32::extras::BestCandidateOptions options;
+options.point_count = 625;
+options.candidates_per_point = 16;
+options.seed = 1;
+
+const std::vector<delaunay32::Point> interior =
+    delaunay32::extras::sample_polygon_interiors(
+        geometry.points, geometry.polygons, options);
+geometry.points.insert(
+    geometry.points.end(), interior.begin(), interior.end());
+```
+
+The function returns only the newly generated points. It does not mutate the
+outline vector or update ring indices. This is best-candidate,
+blue-noise-style sampling rather than a strict Poisson-disk guarantee.
+
+### SVG output
+
+`<delaunay32/extras/svg.hpp>` provides `write_mesh_svg()` overloads for integer
+and float meshes and `write_polygon_mesh_svg()` for one polygon domain. Float
+SVG output accepts the corresponding `QuantizationReport`. These writers are
+intended for diagnostics, fixtures, and examples rather than as a configurable
+general-purpose graphics library. The comparison panels, logo captions, and
+repository-specific layout remain private to the examples.
+
 ## Common output behavior
 
 At least three input points and at least three unique triangulation coordinates
@@ -539,6 +654,7 @@ cmake --build build --target \
   delaunay32_logo_polygon_example
 ```
 
-The example JSON schema stores points as `[x, y]`, constraints as endpoint-index
-pairs, and polygon rings as `polygon.outer` plus `polygon.holes`. The parser
-belongs only to the examples; the installed library has no JSON dependency.
+The Delaunay32 geometry JSON schema stores points as `[x, y]`, constraints as
+endpoint-index pairs, and polygon rings as `polygon.outer` plus
+`polygon.holes`. It is implemented by the separately linked installed extras
+library; the core triangulation target has no JSON dependency.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "delaunay32/delaunay.hpp"
-#include "geometry_io.hpp"
-#include "svg_io.hpp"
+#include "delaunay32/extras/json.hpp"
+#include "presentation_svg.hpp"
 
 #include <exception>
 #include <iostream>
@@ -19,13 +19,13 @@ int main(int argc, char** argv) {
         const std::string input_path = argv[1];
         const std::string output_path =
             argc == 3 ? argv[2] : "delaunay32_constrained.svg";
-        const delaunay32_example::GeometryInput geometry =
-            delaunay32_example::read_geometry_json(input_path);
+        const delaunay32::extras::Geometry geometry =
+            delaunay32::extras::read_geometry_json(input_path);
         if (geometry.constraints.empty()) {
             throw std::invalid_argument(
                 "constrained example requires at least one constraint");
         }
-        if (!geometry.outer_ring.empty() || !geometry.holes.empty()) {
+        if (geometry.polygon.has_value() || !geometry.polygons.empty()) {
             throw std::invalid_argument(
                 "constrained example does not consume polygon rings");
         }

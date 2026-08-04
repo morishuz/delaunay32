@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 #include "delaunay32/delaunay.hpp"
-#include "svg_io.hpp"
+#include "delaunay32/extras/sampling.hpp"
+#include "delaunay32/extras/svg.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
 #include <iostream>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,26 +23,11 @@ constexpr float kMinY = 40.125F;
 constexpr float kMaxY = 640.625F;
 
 std::vector<delaunay32::FloatPoint> make_random_points() {
-    // Include the domain corners so the SVG bounds are stable, then fill the
-    // interior with deterministic random float coordinates.
-    std::vector<delaunay32::FloatPoint> points = {
-        {kMinX, kMinY},
-        {kMaxX, kMinY},
-        {kMaxX, kMaxY},
-        {kMinX, kMaxY},
-    };
-    points.reserve(kPointCount);
-
-    std::mt19937_64 random(kSeed);
-    std::uniform_real_distribution<float> x_coordinate(kMinX, kMaxX);
-    std::uniform_real_distribution<float> y_coordinate(kMinY, kMaxY);
-    while (points.size() < kPointCount) {
-        points.push_back({
-            x_coordinate(random),
-            y_coordinate(random),
-        });
-    }
-    return points;
+    delaunay32::extras::UniformFloatOptions options;
+    options.point_count = kPointCount;
+    options.bounds = {kMinX, kMaxX, kMinY, kMaxY};
+    options.seed = kSeed;
+    return delaunay32::extras::generate_uniform_float_points(options);
 }
 
 }  // namespace
@@ -70,7 +55,7 @@ int main(int argc, char** argv) {
             result.quantization;
 
         // Triangle stores only indices, so rendering uses the original floats.
-        delaunay32_example::write_svg(
+        delaunay32::extras::write_mesh_svg(
             output_path, points, triangles, report);
 
         std::cout << std::setprecision(9)

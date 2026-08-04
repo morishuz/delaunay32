@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "delaunay32/delaunay.hpp"
-#include "geometry_io.hpp"
-#include "svg_io.hpp"
+#include "delaunay32/extras/svg.hpp"
+#include "example_cli.hpp"
 
 #include <exception>
 #include <iostream>
@@ -13,10 +13,10 @@ int main(int argc, char** argv) {
     try {
         const delaunay32_example::Options options =
             delaunay32_example::parse_options(argc, argv);
-        const delaunay32_example::GeometryInput geometry =
+        const delaunay32::extras::Geometry geometry =
             delaunay32_example::load_geometry(options);
         if (!geometry.constraints.empty() ||
-            !geometry.outer_ring.empty() || !geometry.holes.empty() ||
+            geometry.polygon.has_value() ||
             !geometry.polygons.empty()) {
             throw std::invalid_argument(
                 "ordinary SVG example expects a points-only JSON file");
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         const std::vector<delaunay32::Triangle> triangles =
             triangulator.triangulate_int(points);
 
-        delaunay32_example::write_svg(
+        delaunay32::extras::write_mesh_svg(
             options.output_path, points, triangles);
         std::cout << "wrote " << options.output_path << ": "
                   << points.size() << " points, "

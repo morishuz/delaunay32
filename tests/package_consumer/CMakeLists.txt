@@ -6,7 +6,7 @@ find_package(delaunay32 0.5 CONFIG REQUIRED)
 add_executable(delaunay32_package_consumer main.cpp)
 target_compile_features(delaunay32_package_consumer PRIVATE cxx_std_17)
 target_link_libraries(
-    delaunay32_package_consumer PRIVATE delaunay32::delaunay32)
+    delaunay32_package_consumer PRIVATE delaunay32::extras)
 
 enable_testing()
 add_test(NAME package_consumer COMMAND delaunay32_package_consumer)

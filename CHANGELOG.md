@@ -7,6 +7,15 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ## 0.5.1 - 2026-08-04
 
+### Added
+
+- An optional, separately linked `delaunay32::extras` companion library with
+  unique integer point generation, float point generation, boundary-aware
+  best-candidate polygon sampling, exact integer domain queries, Delaunay32
+  geometry JSON input/output, and diagnostic SVG export.
+- Installed-package and round-trip validation for the extras target, including
+  sampling, geometry JSON, and ordinary and polygon SVG output.
+
 ### Changed
 
 - Constrained triangulation now legalizes only the neighborhoods changed by
@@ -16,6 +25,9 @@ Notable changes to Delaunay32 are documented here. The project follows
 - One-million-point constrained workloads are about 30% faster with one
   thread and 50–58% faster in automatic mode on the reference Apple M1 system,
   without a measurable ordinary-Delaunay regression.
+- The examples now delegate reusable sampling, geometry, JSON, and generic SVG
+  work to `delaunay32::extras`; only CLI handling and bespoke comparison/logo
+  presentation remain example-private.
 
 ## 0.5.0 - 2026-08-04
 

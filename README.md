@@ -29,6 +29,8 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
 - Opt-in halfedge adjacency, convex hull, and duplicate representative mapping
 - Automatic, fixed-step, or fixed-scale float quantization with
   precision limits and collision policies
+- Optional `delaunay32::extras` companion target for point sampling,
+  Delaunay32 geometry JSON, domain queries, and SVG export
 - MIT licensed and dependency-free for normal library use
 
 ## Documentation
@@ -175,6 +177,9 @@ cmake -S . -B build \
 cmake --build build -j
 ```
 
+The separately linked extras companion is built by default. Add
+`-DDELAUNAY32_BUILD_EXTRAS=OFF` for a strictly core-only build.
+
 Install with:
 
 ```sh
@@ -200,7 +205,9 @@ configuration when building, testing, and installing. Built executables are
 therefore under `build\Release\`, for example
 `build\Release\delaunay_benchmark.exe`.
 
-The exported CMake target is `delaunay32::delaunay32`.
+The exported CMake targets are `delaunay32::delaunay32` for triangulation and
+`delaunay32::extras` for the optional companion utilities. The extras target
+links to the core target; the core target never links to extras.
 
 ## Usage
 
@@ -339,6 +346,34 @@ The result also reports the predicate width and actual thread count.
 Floating-point results include their `QuantizationReport`. The triangle-only
 APIs do not construct any of the additional fields.
 
+### Optional extras
+
+Link `delaunay32::extras` when an application also wants reusable fixture and
+visualization utilities:
+
+```cpp
+#include <delaunay32/extras/sampling.hpp>
+#include <delaunay32/extras/svg.hpp>
+
+delaunay32::extras::UniformIntOptions sampling;
+sampling.point_count = 10000;
+sampling.bounds = {0, 9999, 0, 9999};
+sampling.seed = 42;
+
+const auto points =
+    delaunay32::extras::generate_uniform_int_points(sampling);
+const auto triangles = triangulator.triangulate_int(points);
+delaunay32::extras::write_mesh_svg("mesh.svg", points, triangles);
+```
+
+`read_geometry_json()` and `write_geometry_json()` implement the documented
+Delaunay32 geometry schema for points, constraints, and polygon rings. They are
+deliberately schema-specific, not a general JSON API.
+`sample_polygon_interiors()` provides boundary-aware best-candidate,
+blue-noise-style sampling for one or more indexed polygon domains. See the
+[usage guide](docs/usage.md#optional-extras-companion-library) for the complete
+extras API.
+
 The [usage guide](docs/usage.md) gives the exact integer span limits, explains
 every `QuantizationReport` field, lists all overloads and exceptions, and covers
 duplicates, collinear input, winding, threading, and platform differences.
@@ -466,12 +501,13 @@ its editable geometry is [`polygon.json`](examples/data/polygon.json).
 ### Polygon-constrained logo
 
 This separate example reads ten independent glyph domains from JSON and
-generates 625 new boundary-aware best-candidate blue-noise points inside them
-on every run. For each point, it keeps the best of 16 random candidates based
-on distance from the domain boundary and previously accepted points. The
-fixture stores only high-resolution integer outline vertices and their outer
-and hole rings; it contains no generated mesh points. Consequently there is no
-random exterior cloud and no runtime font or text-rendering dependency.
+generates 625 boundary-aware best-candidate blue-noise-style points inside
+them at runtime. For each point, it keeps the best of 16 seeded random
+candidates based on distance from the domain boundary and previously accepted
+points. The fixture stores only high-resolution integer outline vertices and
+their outer and hole rings; it contains no generated mesh points. Consequently
+there is no random exterior cloud and no runtime font or text-rendering
+dependency.
 
 ```sh
 cmake --build build-debug --target delaunay32_logo_polygon_example --parallel
@@ -487,8 +523,8 @@ integer SVG example and image remain intact.
 
 ### Integer points and JSON input
 
-The dependency-free example accepts arbitrary signed integer points from a
-JSON geometry file:
+The example accepts arbitrary signed integer points from a Delaunay32 geometry
+JSON file:
 
 ```json
 {
@@ -516,8 +552,8 @@ corners. Its point count includes those corners. In JSON mode, the file must
 contain every desired point, including any boundary and corner points; the
 example does not add or remove points.
 
-The example-only JSON schema also accepts optional topology without adding a
-JSON dependency to the library:
+The installed extras library's schema also accepts optional topology without
+adding a third-party JSON dependency:
 
 ```json
 {
@@ -534,7 +570,8 @@ JSON dependency to the library:
 `polygon.holes` contain the point indices accepted by
 `triangulate_polygon_int()`. A `polygons` array can hold multiple objects with
 the same `outer` and `holes` fields over one shared points array; `polygon` and
-`polygons` are mutually exclusive.
+`polygons` are mutually exclusive. Applications can use the same format through
+`delaunay32::extras::read_geometry_json()` and `write_geometry_json()`.
 
 ## Development
 

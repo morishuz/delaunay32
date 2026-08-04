@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: MIT
 
 #include <delaunay32/delaunay.hpp>
+#include <delaunay32/extras/sampling.hpp>
 
 #include <vector>
 
 int main() {
+    delaunay32::extras::UniformIntOptions sample_options;
+    sample_options.point_count = 8;
+    sample_options.bounds = {0, 100, 0, 100};
+    const std::vector<delaunay32::Point> sampled_points =
+        delaunay32::extras::generate_uniform_int_points(sample_options);
+    if (sampled_points.size() != sample_options.point_count) {
+        return 7;
+    }
+
     const std::vector<delaunay32::Point> integer_points = {
         {0, 0},
         {100, 0},
