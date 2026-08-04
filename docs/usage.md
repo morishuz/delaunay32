@@ -523,6 +523,9 @@ standard library exceptions.
 - [`delaunay_polygon_example.cpp`](../examples/delaunay_polygon_example.cpp)
   loads indexed outer and hole rings, triangulates the domain, and renders
   retained and omitted points.
+- [`delaunay32_logo_polygon_example.cpp`](../examples/delaunay32_logo_polygon_example.cpp)
+  triangulates multiple polygonal glyph domains from one shared outline
+  fixture and writes the repository logo SVG.
 
 Build all examples with:
 
@@ -532,7 +535,8 @@ cmake --build build --target \
   delaunay_float_example \
   delaunay_svg_example \
   delaunay_constrained_example \
-  delaunay_polygon_example
+  delaunay_polygon_example \
+  delaunay32_logo_polygon_example
 ```
 
 The example JSON schema stores points as `[x, y]`, constraints as endpoint-index

@@ -20,6 +20,32 @@ bool opposite_nonzero_signs(std::int64_t a, std::int64_t b) {
 
 }  // namespace
 
+std::vector<Triangle> Triangulator::triangulate_constrained_int(
+    const std::vector<Point>& points,
+    const std::vector<Constraint>& constraints) {
+    if (constraints.empty()) {
+        return triangulate_int(points);
+    }
+    require_point_count(points.size());
+    for (const Constraint constraint : constraints) {
+        if (constraint.i0 >= points.size() ||
+            constraint.i1 >= points.size()) {
+            throw std::invalid_argument(
+                "constraint endpoint is outside the point array");
+        }
+        if (constraint.i0 == constraint.i1) {
+            throw std::invalid_argument(
+                "constraint endpoints are coincident");
+        }
+    }
+    load_int_points(points);
+    std::vector<std::uint32_t> representatives;
+    build_loaded_topology(&representatives);
+    build_constraint_indices(representatives, points.size());
+    recover_constraints(constraints);
+    return finish_triangle_export();
+}
+
 void Triangulator::build_constraint_indices(
     const std::vector<std::uint32_t>& representatives,
     std::size_t original_point_count) {

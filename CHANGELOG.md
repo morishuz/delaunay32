@@ -5,6 +5,8 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-04
+
 ### Added
 
 - `Constraint` and `triangulate_constrained_int()`, providing exact
@@ -16,8 +18,12 @@ Notable changes to Delaunay32 are documented here. The project follows
   normalization, boundary chains through existing sites, and domain clipping.
 - A fixed constrained-triangulation comparison example and an extensible,
   dependency-free example JSON schema for points, constraints, and polygon
-  rings. A polygon-with-holes SVG example exercises domain filtering. Existing
-  CSV example fixtures now use JSON.
+  rings. Polygon-with-holes examples exercise domain filtering with both a
+  fixed domain and a multi-domain Delaunay32 logo.
+
+### Changed
+
+- Existing CSV example fixtures now use JSON.
 
 ## 0.4.0 - 2026-08-03
 
