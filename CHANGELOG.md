@@ -25,6 +25,12 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 - Existing CSV example fixtures now use JSON.
 
+### Fixed
+
+- The multi-domain logo fixture stays within the certified 64-bit predicate
+  range, allowing the polygon example to run on MSVC and other platforms
+  without `__int128`.
+
 ## 0.4.0 - 2026-08-03
 
 ### Added
