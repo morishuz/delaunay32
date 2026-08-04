@@ -74,35 +74,30 @@ of the original floating-point coordinates is required.
 ## Performance
 
 The following results summarize Release-build benchmarks with one million
-points. Delaunay32 automatic multithreaded mode is the `100%` baseline, and
-lower is better: `400%` means an implementation took approximately four times
+points. Delaunay32 automatic multithreaded mode is the `1.0×` baseline, and
+lower is better: `4.0×` means an implementation took approximately four times
 as long.
 
 Each comparison used identical input points for every library. Results are
 rounded averages across the measured point distributions and, for constrained
 triangulation, several representative constraint layouts.
 
-### Unconstrained Delaunay
-
-| Delaunay32 | Fade2D | delaunator-cpp |
-|--:|--:|--:|
-| **100%** | ~450% | ~1100% |
-
-### Constrained Delaunay
-
-| Delaunay32 | Fade2D |
-|--:|--:|
-| **100%** | ~430% |
+| workload | Delaunay32 | Fade2D | delaunator-cpp |
+|:--|--:|--:|--:|
+| Unconstrained Delaunay | **1.0×** | ~4.5× | ~11× |
+| Constrained Delaunay | **1.0×** | ~4.3× | — |
 
 [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) is absent from the
-second table because it does not support constrained triangulation. It is
+constrained row because it does not support constrained triangulation. It is
 included only as an optional benchmark dependency; Delaunay32 does not depend
 on it. The [Fade2D](https://www.geom.at/products/fade2d/) comparison used
 Fade2D 2.17.3 through its bulk insertion API.
 
 These ratios are intentionally approximate and remain machine- and
-workload-dependent. Run the included Delaunator benchmark on your system, or
-build a matched benchmark against Fade2D, when exact results matter.
+workload-dependent. The repository includes a detailed benchmark comparing
+unconstrained Delaunay32 with delaunator-cpp across different point
+distributions. Run it on your machine for more detailed performance
+information.
 
 ## Quick start
 
