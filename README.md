@@ -15,7 +15,7 @@ algorithm, compact two-dart topology, and optional multithreading. The result is
 a triangulator that is deterministic, robust, and particularly fast on large
 point sets.
 
-For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) and around 3× faster than [Fade2D](https://www.geom.at/products/fade2d/).
+For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) and around 4× faster than [Fade2D](https://www.geom.at/products/fade2d/).
 
 ## Highlights
 
@@ -73,87 +73,36 @@ of the original floating-point coordinates is required.
 
 ## Performance
 
-The benchmark compares `Delaunay32` with
-[Delaunator](https://github.com/mapbox/delaunator), a widely used,
-high-performance open-source Delaunay implementation originally developed by
-Mapbox. It uses
-[delaunator-cpp](https://github.com/delfrrr/delaunator-cpp), whose maintainers
-describe it as probably the fastest open-source C++ implementation.
+The following results summarize Release-build benchmarks with one million
+points. Delaunay32 automatic multithreaded mode is the `100%` baseline, and
+lower is better: `400%` means an implementation took approximately four times
+as long.
 
-Delaunator-cpp is included only as an optional benchmark submodule. `Delaunay32`
-does not wrap it or depend on it as part of the triangulation algorithm.
-The published tables measure ordinary point-set triangulation; constrained
-segment recovery is not included in those timings.
+Each comparison used identical input points for every library. Results are
+rounded averages across the measured point distributions and, for constrained
+triangulation, several representative constraint layouts.
 
-### Headline results
+### Unconstrained Delaunay
 
-For one million input points:
+| Delaunay32 | Fade2D | delaunator-cpp |
+|--:|--:|--:|
+| **100%** | ~450% | ~1100% |
 
-| distribution | Delaunay32 1T | Delaunay32 auto | Delaunator | serial speedup | auto speedup |
-|:--|--:|--:|--:|--:|--:|
-| uniform | 147.909 ms | 51.741 ms | 551.592 ms | 3.73× | 10.66× |
-| clustered | 143.195 ms | 47.979 ms | 542.438 ms | 3.79× | 11.31× |
-| diagonal | 144.347 ms | 49.935 ms | 545.491 ms | 3.78× | 10.92× |
+### Constrained Delaunay
 
-### Fade2D comparison
+| Delaunay32 | Fade2D |
+|--:|--:|
+| **100%** | ~430% |
 
-A matched same-process benchmark used one million identical integer points and
-the same constraint endpoint pairs for Delaunay32 and Fade2D 2.17.3. The
-Fade2D adapter used its bulk insertion API. Input ingestion and triangle export
-were included for both libraries; generation and validation were excluded.
-The table shows the uniform-distribution result; the proprietary Fade2D SDK
-and its comparison adapter are not distributed with this repository.
+[delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) is absent from the
+second table because it does not support constrained triangulation. It is
+included only as an optional benchmark dependency; Delaunay32 does not depend
+on it. The [Fade2D](https://www.geom.at/products/fade2d/) comparison used
+Fade2D 2.17.3 through its bulk insertion API.
 
-| workload | Delaunay32 1T advantage | Delaunay32 auto advantage |
-|:--|--:|--:|
-| ordinary Delaunay | 2.16× | 3.88× |
-| one short constraint | 2.73× | 4.01× |
-| one long constraint | 2.78× | 4.16× |
-| 8-ray constraint fan | 2.62× | 3.99× |
-| 64-ray constraint fan | 2.48× | 3.30× |
-
-In summary:
-
-- For ordinary Delaunay, automatic Delaunay32 was 3.88–5.04× faster across
-  the uniform, clustered, and diagonal distributions.
-- For constrained Delaunay, Delaunay32 was 2.48–2.78× faster with one thread
-  and 3.30–5.22× faster in automatic mode.
-
-The fan workloads are synthetic recovery stress cases, not densely constrained
-real-world meshes.
-
-As always, benchmark results are machine- and workload-specific. Run the
-included benchmark on your target hardware before making deployment decisions.
-
-### Full benchmark
-
-These are median end-to-end times from a Release build on an Apple M1
-(8 cores, 16 GB) using Apple Clang 21. The deterministic inputs contain unique
-points in `[0, 100000)²`.
-
-Input generation and validation are excluded. Input ingestion by `Delaunay32`
-and output triangle materialization by both implementations are included. The
-default fresh-instance lifecycle also includes `Triangulator` construction,
-working-storage teardown, and worker-thread lifetime for every sample.
-
-Delaunator's `std::vector<double>` is prepared once outside the timed region,
-giving it the favorable assumption that its input is already available in its
-native representation. In the ratio columns, lower is better.
-
-| distribution | points | Delaunay32 1T ms | Delaunay32 auto ms | threads | Delaunator ms | 1T / del | auto / del |
-|:--|--:|--:|--:|--:|--:|--:|--:|
-| uniform | 1,000 | 0.147 | 0.147 | 1 | 0.295 | 0.498x | 0.498x |
-| uniform | 10,000 | 1.369 | 1.363 | 1 | 3.052 | 0.449x | 0.447x |
-| uniform | 100,000 | 14.317 | 5.658 | 8 | 39.837 | 0.359x | 0.142x |
-| uniform | 1,000,000 | 147.909 | 51.741 | 8 | 551.592 | 0.268x | 0.094x |
-| clustered | 1,000 | 0.093 | 0.093 | 1 | 0.221 | 0.419x | 0.420x |
-| clustered | 10,000 | 1.343 | 1.355 | 1 | 3.260 | 0.412x | 0.416x |
-| clustered | 100,000 | 14.051 | 5.354 | 8 | 39.629 | 0.355x | 0.135x |
-| clustered | 1,000,000 | 143.195 | 47.979 | 8 | 542.438 | 0.264x | 0.088x |
-| diagonal | 1,000 | 0.097 | 0.095 | 1 | 0.242 | 0.400x | 0.390x |
-| diagonal | 10,000 | 1.376 | 1.375 | 1 | 3.159 | 0.436x | 0.435x |
-| diagonal | 100,000 | 14.318 | 5.838 | 8 | 39.682 | 0.361x | 0.147x |
-| diagonal | 1,000,000 | 144.347 | 49.935 | 8 | 545.491 | 0.265x | 0.092x |
+These ratios are intentionally approximate and remain machine- and
+workload-dependent. Run the included Delaunator benchmark on your system, or
+build a matched benchmark against Fade2D, when exact results matter.
 
 ## Quick start
 
