@@ -2,6 +2,8 @@
 
 **Fast, parallel 2D Delaunay triangulation using exact integer predicates, with direct float input.**
 
+![Blue-noise points triangulated inside polygonal letter domains with constrained outer and hole boundaries](images/delaunay32_logo_polygon.svg)
+
 `Delaunay32` is a C++17 library for triangulating large sets of discrete 2D
 points: pixels, raster samples, voxel projections, fixed-point geometry, and
 other quantized spatial data. Finite `float` points can also be passed directly;
@@ -14,8 +16,6 @@ a triangulator that is deterministic, robust, and particularly fast on large
 point sets.
 
 For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) and around 3× faster than [Fade2D](https://www.geom.at/products/fade2d/).
-
-![Delaunay32 mesh of 1,000 integer-coordinate points filling a square with 1,994 triangles](images/delaunay32_mesh.svg)
 
 ## Highlights
 
@@ -42,6 +42,8 @@ For large point sets, Delaunay32 is over 10× faster than [delaunator-cpp](https
   ordinary and constrained triangulations of the same fixed geometry
 - [Polygon SVG example](examples/delaunay_polygon_example.cpp): a concave
   integer domain with three holes and points omitted by domain clipping
+- [Polygon logo SVG example](examples/delaunay32_logo_polygon_example.cpp):
+  fresh blue-noise points inside ten JSON-defined polygonal glyph domains
 - [Integer SVG example](examples/delaunay_svg_example.cpp): generated or JSON
   integer input
 
@@ -436,6 +438,28 @@ The example code is in
 [`delaunay_polygon_example.cpp`](examples/delaunay_polygon_example.cpp), and
 its editable geometry is [`polygon.json`](examples/data/polygon.json).
 
+### Polygon-constrained logo
+
+This separate example reads ten independent glyph domains from JSON and
+generates 625 new boundary-aware best-candidate blue-noise points inside them
+on every run. For each point, it keeps the best of 16 random candidates based
+on distance from the domain boundary and previously accepted points. The
+fixture stores only high-resolution integer outline vertices and their outer
+and hole rings; it contains no generated mesh points. Consequently there is no
+random exterior cloud and no runtime font or text-rendering dependency.
+
+```sh
+cmake --build build-debug --target delaunay32_logo_polygon_example --parallel
+./build-debug/delaunay32_logo_polygon_example \
+  examples/data/delaunay32_logo.json delaunay32-logo-polygon.svg
+```
+
+The example code is in
+[`delaunay32_logo_polygon_example.cpp`](examples/delaunay32_logo_polygon_example.cpp),
+its outline fixture is
+[`delaunay32_logo.json`](examples/data/delaunay32_logo.json), and the original
+integer SVG example and image remain intact.
+
 ### Integer points and JSON input
 
 The dependency-free example accepts arbitrary signed integer points from a
@@ -483,7 +507,9 @@ JSON dependency to the library:
 
 `constraints` drives the constrained example. `polygon.outer` and
 `polygon.holes` contain the point indices accepted by
-`triangulate_polygon_int()`.
+`triangulate_polygon_int()`. A `polygons` array can hold multiple objects with
+the same `outer` and `holes` fields over one shared points array; `polygon` and
+`polygons` are mutually exclusive.
 
 ## Development
 

@@ -16,7 +16,8 @@ int main(int argc, char** argv) {
         const delaunay32_example::GeometryInput geometry =
             delaunay32_example::load_geometry(options);
         if (!geometry.constraints.empty() ||
-            !geometry.outer_ring.empty() || !geometry.holes.empty()) {
+            !geometry.outer_ring.empty() || !geometry.holes.empty() ||
+            !geometry.polygons.empty()) {
             throw std::invalid_argument(
                 "ordinary SVG example expects a points-only JSON file");
         }

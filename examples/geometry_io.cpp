@@ -37,6 +37,55 @@ std::uint64_t point_key(const Point& point) {
            static_cast<std::uint32_t>(point.y);
 }
 
+std::int64_t orient(const Point& a, const Point& b, const Point& point) {
+    return (static_cast<std::int64_t>(b.x) - a.x) *
+               (static_cast<std::int64_t>(point.y) - a.y) -
+           (static_cast<std::int64_t>(b.y) - a.y) *
+               (static_cast<std::int64_t>(point.x) - a.x);
+}
+
+bool point_on_segment(const Point& point, const Point& a, const Point& b) {
+    if (orient(a, b, point) != 0) {
+        return false;
+    }
+    return point.x >= std::min(a.x, b.x) &&
+           point.x <= std::max(a.x, b.x) &&
+           point.y >= std::min(a.y, b.y) &&
+           point.y <= std::max(a.y, b.y);
+}
+
+enum class RingLocation {
+    outside,
+    inside,
+    boundary,
+};
+
+RingLocation locate_in_ring(
+    const Point& point,
+    const std::vector<std::uint32_t>& ring,
+    const std::vector<Point>& points) {
+    bool inside = false;
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        const Point& a = points[ring[i]];
+        const Point& b = points[ring[(i + 1) % ring.size()]];
+        if (point_on_segment(point, a, b)) {
+            return RingLocation::boundary;
+        }
+        if ((a.y > point.y) == (b.y > point.y)) {
+            continue;
+        }
+        const long double intersection_x =
+            static_cast<long double>(a.x) +
+            (static_cast<long double>(point.y) - a.y) *
+                (static_cast<long double>(b.x) - a.x) /
+                (static_cast<long double>(b.y) - a.y);
+        if (static_cast<long double>(point.x) < intersection_x) {
+            inside = !inside;
+        }
+    }
+    return inside ? RingLocation::inside : RingLocation::outside;
+}
+
 std::vector<Point> generate_points(
     std::size_t point_count,
     std::uint64_t seed) {
@@ -84,6 +133,7 @@ public:
         bool have_points = false;
         bool have_constraints = false;
         bool have_polygon = false;
+        bool have_polygons = false;
 
         expect('{');
         if (!take('}')) {
@@ -108,6 +158,12 @@ public:
                     }
                     parse_polygon(geometry);
                     have_polygon = true;
+                } else if (key == "polygons") {
+                    if (have_polygons) {
+                        fail("duplicate polygons field");
+                    }
+                    geometry.polygons = parse_polygons();
+                    have_polygons = true;
                 } else {
                     fail("unknown top-level field: " + key);
                 }
@@ -124,7 +180,10 @@ public:
         if (!have_points) {
             fail("missing points field");
         }
-        validate(geometry, have_polygon);
+        if (have_polygon && have_polygons) {
+            fail("polygon and polygons cannot both be present");
+        }
+        validate(geometry, have_polygon, have_polygons);
         return geometry;
     }
 
@@ -391,7 +450,8 @@ private:
         }
     }
 
-    void parse_polygon(GeometryInput& geometry) {
+    PolygonDomain parse_polygon_domain() {
+        PolygonDomain domain;
         bool have_outer = false;
         bool have_holes = false;
         expect('{');
@@ -403,13 +463,13 @@ private:
                     if (have_outer) {
                         fail("duplicate polygon outer field");
                     }
-                    geometry.outer_ring = parse_ring();
+                    domain.outer_ring = parse_ring();
                     have_outer = true;
                 } else if (key == "holes") {
                     if (have_holes) {
                         fail("duplicate polygon holes field");
                     }
-                    geometry.holes = parse_holes();
+                    domain.holes = parse_holes();
                     have_holes = true;
                 } else {
                     fail("unknown polygon field: " + key);
@@ -422,6 +482,28 @@ private:
         }
         if (!have_outer) {
             fail("polygon object is missing its outer field");
+        }
+        return domain;
+    }
+
+    void parse_polygon(GeometryInput& geometry) {
+        PolygonDomain domain = parse_polygon_domain();
+        geometry.outer_ring = std::move(domain.outer_ring);
+        geometry.holes = std::move(domain.holes);
+    }
+
+    std::vector<PolygonDomain> parse_polygons() {
+        std::vector<PolygonDomain> polygons;
+        expect('[');
+        if (take(']')) {
+            return polygons;
+        }
+        while (true) {
+            polygons.push_back(parse_polygon_domain());
+            if (take(']')) {
+                return polygons;
+            }
+            expect(',');
         }
     }
 
@@ -441,7 +523,8 @@ private:
 
     void validate(
         const GeometryInput& geometry,
-        bool have_polygon) const {
+        bool have_polygon,
+        bool have_polygons) const {
         if (geometry.points.size() < 3) {
             fail("points must contain at least three entries");
         }
@@ -471,6 +554,30 @@ private:
                     "polygon hole " + std::to_string(i));
             }
         }
+        if (have_polygons) {
+            if (geometry.polygons.empty()) {
+                fail("polygons must contain at least one domain");
+            }
+            for (std::size_t polygon = 0;
+                 polygon < geometry.polygons.size();
+                 ++polygon) {
+                const PolygonDomain& domain = geometry.polygons[polygon];
+                validate_ring(
+                    domain.outer_ring,
+                    geometry.points.size(),
+                    "polygons domain " + std::to_string(polygon) +
+                        " outer ring");
+                for (std::size_t hole = 0;
+                     hole < domain.holes.size();
+                     ++hole) {
+                    validate_ring(
+                        domain.holes[hole],
+                        geometry.points.size(),
+                        "polygons domain " + std::to_string(polygon) +
+                            " hole " + std::to_string(hole));
+                }
+            }
+        }
     }
 };
 
@@ -498,6 +605,22 @@ std::uint64_t parse_seed(const char* value) {
 }
 
 }  // namespace
+
+bool point_is_strictly_inside_domain(
+    const Point& point,
+    const PolygonDomain& domain,
+    const std::vector<Point>& points) {
+    if (locate_in_ring(point, domain.outer_ring, points) !=
+        RingLocation::inside) {
+        return false;
+    }
+    for (const std::vector<std::uint32_t>& hole : domain.holes) {
+        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
+            return false;
+        }
+    }
+    return true;
+}
 
 Options parse_options(int argc, char** argv) {
     Options options;

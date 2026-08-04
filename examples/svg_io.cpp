@@ -506,4 +506,92 @@ void write_polygon_svg(
     }
 }
 
+void write_logo_polygon_svg(
+    const std::string& output_path,
+    const std::vector<Point>& points,
+    std::size_t interior_point_count,
+    const std::vector<PolygonDomain>& domains,
+    const std::vector<Triangle>& triangles) {
+    std::ofstream output(output_path);
+    if (!output) {
+        throw std::runtime_error("could not create SVG: " + output_path);
+    }
+    const SvgTransform<Point> transform(points);
+
+    std::size_t hole_count = 0;
+    for (const PolygonDomain& domain : domains) {
+        hole_count += domain.holes.size();
+    }
+
+    output
+        << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+        << std::fixed << std::setprecision(2) << transform.canvas_width
+        << "\" height=\"" << transform.canvas_height
+        << "\" viewBox=\"0 0 " << transform.canvas_width << ' '
+        << transform.canvas_height << "\">\n"
+        << "<rect width=\"100%\" height=\"100%\" fill=\"#f7f7f5\"/>\n"
+        << "<text x=\"30\" y=\"35\" font-family=\"system-ui, sans-serif\" "
+           "font-size=\"18\" fill=\"#202426\">"
+           "Delaunay32 constrained polygon mesh | "
+        << interior_point_count << " blue-noise interior points | "
+        << hole_count
+        << " holes | " << triangles.size() << " triangles</text>\n";
+
+    static constexpr std::array<const char*, 8> colors = {
+        "#d8eee7",
+        "#d9e7f3",
+        "#f1e2a8",
+        "#e6def0",
+        "#cce7ec",
+        "#e5ebc8",
+        "#f0d9cf",
+        "#d8e5d5",
+    };
+    for (const Triangle& triangle : triangles) {
+        const std::size_t color =
+            (static_cast<std::size_t>(triangle.i0) * 17 +
+             static_cast<std::size_t>(triangle.i1) * 31 +
+             static_cast<std::size_t>(triangle.i2) * 43) %
+            colors.size();
+        output << "<polygon fill=\"" << colors[color]
+               << "\" stroke=\"#4d5b60\" stroke-width=\"0.36\" "
+                  "stroke-linejoin=\"round\" points=\"";
+        write_point(output, points[triangle.i0], transform);
+        output << ' ';
+        write_point(output, points[triangle.i1], transform);
+        output << ' ';
+        write_point(output, points[triangle.i2], transform);
+        output << "\"/>\n";
+    }
+
+    const auto write_ring_outline = [&](
+        const std::vector<std::uint32_t>& ring,
+        const char* color,
+        double width) {
+        output << "<polyline fill=\"none\" stroke=\"" << color
+               << "\" stroke-width=\"" << width
+               << "\" stroke-linejoin=\"round\" stroke-linecap=\"round\" "
+                  "points=\"";
+        for (const std::uint32_t index : ring) {
+            write_point(output, points[index], transform);
+            output << ' ';
+        }
+        write_point(output, points[ring.front()], transform);
+        output << "\"/>\n";
+    };
+    for (const PolygonDomain& domain : domains) {
+        write_ring_outline(domain.outer_ring, "#172f35", 0.36);
+        for (const std::vector<std::uint32_t>& hole : domain.holes) {
+            write_ring_outline(hole, "#172f35", 0.36);
+        }
+    }
+
+    output << "</svg>\n";
+    if (!output) {
+        throw std::runtime_error(
+            "failed while writing SVG: " + output_path);
+    }
+}
+
 }  // namespace delaunay32_example

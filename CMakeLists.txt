@@ -106,6 +106,13 @@ if(DELAUNAY32_BUILD_EXAMPLES)
     target_link_libraries(
         delaunay_polygon_example PRIVATE delaunay32_example_support)
     delaunay32_enable_warnings(delaunay_polygon_example)
+
+    add_executable(
+        delaunay32_logo_polygon_example
+        examples/delaunay32_logo_polygon_example.cpp)
+    target_link_libraries(
+        delaunay32_logo_polygon_example PRIVATE delaunay32_example_support)
+    delaunay32_enable_warnings(delaunay32_logo_polygon_example)
 endif()
 
 set(DELAUNATOR_HEADER
@@ -229,6 +236,11 @@ if(DELAUNAY32_BUILD_TESTS)
             COMMAND delaunay_polygon_example
                     "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/polygon.json"
                     "${CMAKE_CURRENT_BINARY_DIR}/mesh-polygon-smoke.svg")
+        add_test(
+            NAME logo_polygon_svg_example
+            COMMAND delaunay32_logo_polygon_example
+                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/delaunay32_logo.json"
+                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-logo-polygon-smoke.svg")
         add_test(
             NAME float_svg_example
             COMMAND delaunay_float_example
