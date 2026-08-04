@@ -338,13 +338,7 @@ std::vector<Triangle> Triangulator::triangulate_int(
     require_point_count(points.size());
     load_int_points(points);
     build_loaded_topology();
-    if (active_thread_count_ > 1) {
-        export_triangles_parallel(
-            active_thread_count_, *worker_team_);
-    } else {
-        export_triangles();
-    }
-    return std::move(triangles_out_);
+    return finish_triangle_export();
 }
 
 std::vector<Triangle> Triangulator::triangulate_constrained_int(
@@ -370,13 +364,7 @@ std::vector<Triangle> Triangulator::triangulate_constrained_int(
     build_loaded_topology(&representatives);
     build_constraint_indices(representatives, points.size());
     recover_constraints(constraints);
-    if (active_thread_count_ > 1) {
-        export_triangles_parallel(
-            active_thread_count_, *worker_team_);
-    } else {
-        export_triangles();
-    }
-    return std::move(triangles_out_);
+    return finish_triangle_export();
 }
 
 void Triangulator::load_float_points(
@@ -434,13 +422,7 @@ std::vector<Triangle> Triangulator::triangulate_float(
     build_loaded_topology(
         nullptr,
         options.collision_policy == QuantizationCollisionPolicy::Reject);
-    if (active_thread_count_ > 1) {
-        export_triangles_parallel(
-            active_thread_count_, *worker_team_);
-    } else {
-        export_triangles();
-    }
-    return std::move(triangles_out_);
+    return finish_triangle_export();
 }
 
 TriangulationResult Triangulator::triangulate_int_full(
@@ -450,12 +432,7 @@ TriangulationResult Triangulator::triangulate_int_full(
     std::vector<std::uint32_t> representatives;
     const PredicateWidth predicate_width =
         build_loaded_topology(&representatives);
-    if (active_thread_count_ > 1) {
-        export_full_result_parallel(
-            active_thread_count_, *worker_team_);
-    } else {
-        export_full_result();
-    }
+    finish_full_export();
     return make_result(
         {}, predicate_width, std::move(representatives));
 }
@@ -471,12 +448,7 @@ TriangulationResult Triangulator::triangulate_float_full(
         build_loaded_topology(
             &representatives,
             options.collision_policy == QuantizationCollisionPolicy::Reject);
-    if (active_thread_count_ > 1) {
-        export_full_result_parallel(
-            active_thread_count_, *worker_team_);
-    } else {
-        export_full_result();
-    }
+    finish_full_export();
     report.unique_points = points_.size();
     report.collapsed_points = points.size() - points_.size();
     return make_result(

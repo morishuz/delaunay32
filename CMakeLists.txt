@@ -68,50 +68,43 @@ target_link_libraries(delaunay32 PUBLIC Threads::Threads)
 delaunay32_enable_warnings(delaunay32)
 
 if(DELAUNAY32_BUILD_EXAMPLES)
-    add_executable(
-        delaunay_svg_example
-        examples/delaunay_svg_example.cpp
+    add_library(
+        delaunay32_example_support STATIC
         examples/geometry_io.cpp
         examples/geometry_io.hpp
         examples/svg_io.cpp
         examples/svg_io.hpp
     )
     target_link_libraries(
-        delaunay_svg_example PRIVATE delaunay32::delaunay32)
+        delaunay32_example_support PUBLIC delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay32_example_support)
+
+    add_executable(
+        delaunay_svg_example
+        examples/delaunay_svg_example.cpp)
+    target_link_libraries(
+        delaunay_svg_example PRIVATE delaunay32_example_support)
     delaunay32_enable_warnings(delaunay_svg_example)
 
     add_executable(
         delaunay_float_example
-        examples/delaunay_float_example.cpp
-        examples/svg_io.cpp
-        examples/svg_io.hpp
-    )
+        examples/delaunay_float_example.cpp)
     target_link_libraries(
-        delaunay_float_example PRIVATE delaunay32::delaunay32)
+        delaunay_float_example PRIVATE delaunay32_example_support)
     delaunay32_enable_warnings(delaunay_float_example)
 
     add_executable(
         delaunay_constrained_example
-        examples/delaunay_constrained_example.cpp
-        examples/geometry_io.cpp
-        examples/geometry_io.hpp
-        examples/svg_io.cpp
-        examples/svg_io.hpp
-    )
+        examples/delaunay_constrained_example.cpp)
     target_link_libraries(
-        delaunay_constrained_example PRIVATE delaunay32::delaunay32)
+        delaunay_constrained_example PRIVATE delaunay32_example_support)
     delaunay32_enable_warnings(delaunay_constrained_example)
 
     add_executable(
         delaunay_polygon_example
-        examples/delaunay_polygon_example.cpp
-        examples/geometry_io.cpp
-        examples/geometry_io.hpp
-        examples/svg_io.cpp
-        examples/svg_io.hpp
-    )
+        examples/delaunay_polygon_example.cpp)
     target_link_libraries(
-        delaunay_polygon_example PRIVATE delaunay32::delaunay32)
+        delaunay_polygon_example PRIVATE delaunay32_example_support)
     delaunay32_enable_warnings(delaunay_polygon_example)
 endif()
 

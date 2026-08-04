@@ -413,6 +413,8 @@ private:
         std::uint32_t destination) const;
     void mark_polygon_excluded_faces(
         const std::vector<std::vector<std::uint32_t>>& rings);
+    std::vector<Triangle> finish_triangle_export();
+    void finish_full_export();
     void export_triangles();
     void export_triangles_parallel(
         std::size_t thread_count,

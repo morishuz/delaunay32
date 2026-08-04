@@ -25,6 +25,10 @@ int main(int argc, char** argv) {
             throw std::invalid_argument(
                 "polygon example requires polygon.outer");
         }
+        if (!geometry.constraints.empty()) {
+            throw std::invalid_argument(
+                "polygon example does not consume standalone constraints");
+        }
 
         delaunay32::Triangulator triangulator(0);
         const std::vector<delaunay32::Triangle> triangles =

@@ -236,6 +236,15 @@ void Triangulator::export_full_result_parallel(
     export_hull();
 }
 
+void Triangulator::finish_full_export() {
+    if (active_thread_count_ > 1) {
+        export_full_result_parallel(
+            active_thread_count_, *worker_team_);
+    } else {
+        export_full_result();
+    }
+}
+
 TriangulationResult Triangulator::make_result(
     const QuantizationReport& quantization,
     PredicateWidth predicate_width,

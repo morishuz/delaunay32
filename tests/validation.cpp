@@ -1557,7 +1557,7 @@ void test_parallel_polygon() {
             points.push_back({x, y});
         }
     }
-    const auto index = [](std::int32_t x, std::int32_t y) {
+    const auto index = [=](std::int32_t x, std::int32_t y) {
         return static_cast<std::uint32_t>(y * width + x);
     };
     const std::vector<std::uint32_t> outer = {

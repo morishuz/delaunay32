@@ -25,6 +25,10 @@ int main(int argc, char** argv) {
             throw std::invalid_argument(
                 "constrained example requires at least one constraint");
         }
+        if (!geometry.outer_ring.empty() || !geometry.holes.empty()) {
+            throw std::invalid_argument(
+                "constrained example does not consume polygon rings");
+        }
 
         delaunay32::Triangulator triangulator(0);
         const std::vector<delaunay32::Triangle> ordinary =
