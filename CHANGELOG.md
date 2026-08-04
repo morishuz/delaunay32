@@ -5,6 +5,18 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ## Unreleased
 
+## 0.5.1 - 2026-08-04
+
+### Changed
+
+- Constrained triangulation now legalizes only the neighborhoods changed by
+  constraint-recovery flips instead of scanning the complete mesh.
+- Constraint endpoint indexing now initializes only requested endpoints and
+  shares the retained worker team in automatic mode.
+- One-million-point constrained workloads are about 30% faster with one
+  thread and 50–58% faster in automatic mode on the reference Apple M1 system,
+  without a measurable ordinary-Delaunay regression.
+
 ## 0.5.0 - 2026-08-04
 
 ### Added

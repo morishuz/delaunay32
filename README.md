@@ -93,10 +93,32 @@ For one million input points:
 | clustered | 143.195 ms | 47.979 ms | 542.438 ms | 3.79× | 11.31× |
 | diagonal | 144.347 ms | 49.935 ms | 545.491 ms | 3.78× | 10.92× |
 
-A same-process benchmark (not included in this repo) at one million points measured Delaunay32 to be:
+### Fade2D comparison
 
-3.7–4.3× as fast as single-threaded [Fade2D](https://www.geom.at/products/fade2d/).    
-2.6–3.5× as fast as automatically threaded [Fade2D](https://www.geom.at/products/fade2d/).   
+A matched same-process benchmark used one million identical integer points and
+the same constraint endpoint pairs for Delaunay32 and Fade2D 2.17.3. The
+Fade2D adapter used its bulk insertion API. Input ingestion and triangle export
+were included for both libraries; generation and validation were excluded.
+The table shows the uniform-distribution result; the proprietary Fade2D SDK
+and its comparison adapter are not distributed with this repository.
+
+| workload | Delaunay32 1T advantage | Delaunay32 auto advantage |
+|:--|--:|--:|
+| ordinary Delaunay | 2.16× | 3.88× |
+| one short constraint | 2.73× | 4.01× |
+| one long constraint | 2.78× | 4.16× |
+| 8-ray constraint fan | 2.62× | 3.99× |
+| 64-ray constraint fan | 2.48× | 3.30× |
+
+In summary:
+
+- For ordinary Delaunay, automatic Delaunay32 was 3.88–5.04× faster across
+  the uniform, clustered, and diagonal distributions.
+- For constrained Delaunay, Delaunay32 was 2.48–2.78× faster with one thread
+  and 3.30–5.22× faster in automatic mode.
+
+The fan workloads are synthetic recovery stress cases, not densely constrained
+real-world meshes.
 
 As always, benchmark results are machine- and workload-specific. Run the
 included benchmark on your target hardware before making deployment decisions.
@@ -525,7 +547,7 @@ production path stays readable.
 
 Delaunay32 follows Semantic Versioning. The version in `CMakeLists.txt` is the
 single source of truth, and published releases use annotated tags such as
-`v0.5.0`. Tags are created from tested commits on `main`, never from feature
+`v0.5.1`. Tags are created from tested commits on `main`, never from feature
 branches. See the [release process](docs/releasing.md) for the checklist.
 
 ## Scope

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "delaunay32/delaunay.hpp"
+#include "internal.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -71,23 +72,6 @@ void Triangulator::build_constraint_indices(
         }
         const std::uint32_t representative = representatives[original];
         original_to_site_[original] = original_to_site_[representative];
-    }
-
-    for (const EdgeRange range : edge_ranges_) {
-        for (std::uint32_t dart = range.first;
-             dart < range.last;
-             ++dart) {
-            if (!is_live_edge(dart)) {
-                continue;
-            }
-            site_edge_[org(dart)] = dart;
-        }
-    }
-    if (std::find(
-            site_edge_.begin(), site_edge_.end(), kDeletedEdge) !=
-        site_edge_.end()) {
-        throw std::logic_error(
-            "constructed topology contains an isolated site");
     }
 }
 
@@ -223,7 +207,8 @@ std::vector<std::uint32_t> Triangulator::crossed_edges(
 
 void Triangulator::recover_constraint(
     std::uint32_t a,
-    std::uint32_t b) {
+    std::uint32_t b,
+    std::vector<std::uint32_t>& legalization_queue) {
     while (a != b) {
         const std::uint32_t existing = find_edge(a, b);
         if (existing != kDeletedEdge) {
@@ -234,7 +219,9 @@ void Triangulator::recover_constraint(
         const std::uint32_t collinear = first_collinear_edge(a, b);
         if (collinear != kDeletedEdge) {
             mark_constrained(collinear);
-            a = dest(collinear);
+            const std::uint32_t reached = dest(collinear);
+            site_edge_[reached] = sym(collinear);
+            a = reached;
             continue;
         }
 
@@ -280,6 +267,7 @@ void Triangulator::recover_constraint(
             }
 
             flip_edge(edge);
+            seed_constraint_legalization(edge, legalization_queue);
             blocked = 0;
             ++flips;
             if (flips > maximum_flips) {
@@ -297,28 +285,54 @@ void Triangulator::recover_constraint(
                 "constraint recovery did not create the requested edge");
         }
         mark_constrained(recovered);
+        site_edge_[reached] = sym(recovered);
         a = reached;
     }
 }
 
-void Triangulator::legalize_unconstrained_edges() {
+void Triangulator::queue_constraint_legalization(
+    std::uint32_t edge,
+    std::vector<std::uint32_t>& legalization_queue) {
+    const std::uint32_t pair = edge & ~1U;
+    if ((edge_constrained_[pair] & kLegalizationQueuedBit) != 0) {
+        return;
+    }
+    edge_constrained_[pair] |= kLegalizationQueuedBit;
+    edge_constrained_[pair + 1U] |= kLegalizationQueuedBit;
+    legalization_queue.push_back(pair);
+}
+
+void Triangulator::seed_constraint_legalization(
+    std::uint32_t edge,
+    std::vector<std::uint32_t>& legalization_queue) {
+    // A diagonal swap can change local Delaunay legality only for the new
+    // diagonal and the four sides of its quadrilateral. The input topology is
+    // already legal, so the union of these neighborhoods is a complete Lawson
+    // worklist after constraint recovery.
+    queue_constraint_legalization(edge, legalization_queue);
+    const std::uint32_t left_next = lnext(edge);
+    const std::uint32_t left_previous = lnext(left_next);
+    const std::uint32_t right_next = lnext(sym(edge));
+    const std::uint32_t right_previous = lnext(right_next);
+    queue_constraint_legalization(left_next, legalization_queue);
+    queue_constraint_legalization(left_previous, legalization_queue);
+    queue_constraint_legalization(right_next, legalization_queue);
+    queue_constraint_legalization(right_previous, legalization_queue);
+}
+
+void Triangulator::legalize_unconstrained_edges(
+    std::vector<std::uint32_t>& legalization_queue) {
     // Lawson flips restore local Delaunay legality without ever removing a
     // recovered segment. A strict in-circle test leaves cocircular choices
     // deterministic.
-    std::vector<std::uint32_t> pending;
-    for (const EdgeRange range : edge_ranges_) {
-        for (std::uint32_t edge = range.first;
-             edge < range.last;
-             edge += 2) {
-            if (is_live_edge(edge) && !is_constrained(edge)) {
-                pending.push_back(edge);
-            }
-        }
-    }
-
-    while (!pending.empty()) {
-        const std::uint32_t edge = pending.back();
-        pending.pop_back();
+    while (!legalization_queue.empty()) {
+        const std::uint32_t edge = legalization_queue.back();
+        legalization_queue.pop_back();
+        const std::uint32_t pair = edge & ~1U;
+        edge_constrained_[pair] &=
+            static_cast<std::uint8_t>(~kLegalizationQueuedBit);
+        edge_constrained_[pair + 1U] &=
+            static_cast<std::uint8_t>(~kLegalizationQueuedBit);
         if (!can_flip(edge)) {
             continue;
         }
@@ -335,10 +349,10 @@ void Triangulator::legalize_unconstrained_edges() {
         const std::uint32_t left_previous = lnext(left_next);
         const std::uint32_t right_next = lnext(sym(edge));
         const std::uint32_t right_previous = lnext(right_next);
-        pending.push_back(left_next & ~1U);
-        pending.push_back(left_previous & ~1U);
-        pending.push_back(right_next & ~1U);
-        pending.push_back(right_previous & ~1U);
+        queue_constraint_legalization(left_next, legalization_queue);
+        queue_constraint_legalization(left_previous, legalization_queue);
+        queue_constraint_legalization(right_next, legalization_queue);
+        queue_constraint_legalization(right_previous, legalization_queue);
     }
 }
 
@@ -383,10 +397,94 @@ void Triangulator::recover_constraints(
         return;
     }
 
+    // Only requested endpoints need an outgoing dart initially. Collinear
+    // sites encountered while walking a segment acquire one lazily.
+    std::vector<std::uint8_t> endpoint_required(points_.size(), 0);
+    std::size_t missing_endpoints = 0;
+    const auto require_site_edge = [&](std::uint32_t site) {
+        if (endpoint_required[site] == 0) {
+            endpoint_required[site] = 1;
+            ++missing_endpoints;
+        }
+    };
     for (const auto constraint : normalized) {
-        recover_constraint(constraint.first, constraint.second);
+        require_site_edge(constraint.first);
+        require_site_edge(constraint.second);
     }
-    legalize_unconstrained_edges();
+
+    const std::size_t endpoint_workers = std::min(
+        active_thread_count_, edge_ranges_.size());
+    if (endpoint_workers > 1) {
+        // Workers keep the shared maps read-only. An endpoint can occur in
+        // several edge ranges, so each worker publishes local candidates and
+        // the caller resolves duplicates after the scan.
+        std::vector<std::vector<std::pair<std::uint32_t, std::uint32_t>>>
+            endpoint_hits(endpoint_workers);
+        const auto scan = [&](std::size_t worker) {
+            std::vector<std::pair<std::uint32_t, std::uint32_t>>& hits =
+                endpoint_hits[worker];
+            const std::size_t first_range =
+                edge_ranges_.size() * worker / endpoint_workers;
+            const std::size_t last_range =
+                edge_ranges_.size() * (worker + 1) / endpoint_workers;
+            for (std::size_t index = first_range;
+                 index < last_range;
+                 ++index) {
+                const EdgeRange range = edge_ranges_[index];
+                for (std::uint32_t dart = range.first;
+                     dart < range.last;
+                     ++dart) {
+                    const std::uint32_t origin = edge_origin_[dart];
+                    if (origin != kDeletedEdge &&
+                        endpoint_required[origin] != 0) {
+                        hits.emplace_back(origin, dart);
+                    }
+                }
+            }
+        };
+        worker_team_->run(endpoint_workers, scan);
+        for (const auto& hits : endpoint_hits) {
+            for (const auto hit : hits) {
+                if (site_edge_[hit.first] == kDeletedEdge) {
+                    site_edge_[hit.first] = hit.second;
+                    --missing_endpoints;
+                }
+            }
+        }
+    } else {
+        for (const EdgeRange range : edge_ranges_) {
+            for (std::uint32_t dart = range.first;
+                 dart < range.last;
+                 ++dart) {
+                const std::uint32_t origin = edge_origin_[dart];
+                if (origin == kDeletedEdge ||
+                    endpoint_required[origin] == 0 ||
+                    site_edge_[origin] != kDeletedEdge) {
+                    continue;
+                }
+                site_edge_[origin] = dart;
+                if (--missing_endpoints == 0) {
+                    break;
+                }
+            }
+            if (missing_endpoints == 0) {
+                break;
+            }
+        }
+    }
+    if (missing_endpoints != 0) {
+        throw std::logic_error(
+            "constructed topology contains an isolated constraint endpoint");
+    }
+
+    std::vector<std::uint32_t> legalization_queue;
+    for (const auto constraint : normalized) {
+        recover_constraint(
+            constraint.first,
+            constraint.second,
+            legalization_queue);
+    }
+    legalize_unconstrained_edges(legalization_queue);
 }
 
 }  // namespace delaunay32

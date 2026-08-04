@@ -201,6 +201,8 @@ private:
     static constexpr std::uint32_t kVisitedBit = 0x80000000U;
     static constexpr std::uint32_t kIndexMask = 0x7fffffffU;
     static constexpr std::uint32_t kDeletedEdge = UINT32_MAX;
+    static constexpr std::uint8_t kConstrainedBit = 0x01U;
+    static constexpr std::uint8_t kLegalizationQueuedBit = 0x02U;
 
     struct Site {
         std::int32_t x = 0;
@@ -389,7 +391,16 @@ private:
         std::size_t original_point_count);
     void recover_constraints(
         const std::vector<Constraint>& constraints);
-    void recover_constraint(std::uint32_t a, std::uint32_t b);
+    void recover_constraint(
+        std::uint32_t a,
+        std::uint32_t b,
+        std::vector<std::uint32_t>& legalization_queue);
+    void queue_constraint_legalization(
+        std::uint32_t edge,
+        std::vector<std::uint32_t>& legalization_queue);
+    void seed_constraint_legalization(
+        std::uint32_t edge,
+        std::vector<std::uint32_t>& legalization_queue);
     std::uint32_t find_edge(
         std::uint32_t origin,
         std::uint32_t destination) const;
@@ -404,7 +415,8 @@ private:
         std::uint32_t edge,
         std::uint32_t a,
         std::uint32_t b) const;
-    void legalize_unconstrained_edges();
+    void legalize_unconstrained_edges(
+        std::vector<std::uint32_t>& legalization_queue);
     std::vector<std::vector<std::uint32_t>> prepare_polygon_rings(
         const std::vector<std::uint32_t>& outer_ring,
         const std::vector<std::vector<std::uint32_t>>& holes) const;

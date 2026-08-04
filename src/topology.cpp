@@ -730,13 +730,13 @@ bool Triangulator::is_live_edge(std::uint32_t edge) const {
 }
 
 bool Triangulator::is_constrained(std::uint32_t edge) const {
-    return edge_constrained_[edge & ~1U] != 0;
+    return (edge_constrained_[edge & ~1U] & kConstrainedBit) != 0;
 }
 
 void Triangulator::mark_constrained(std::uint32_t edge) {
     const std::uint32_t pair = edge & ~1U;
-    edge_constrained_[pair] = 1;
-    edge_constrained_[pair + 1U] = 1;
+    edge_constrained_[pair] |= kConstrainedBit;
+    edge_constrained_[pair + 1U] |= kConstrainedBit;
 }
 
 bool Triangulator::left_face_opposite(
