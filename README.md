@@ -87,11 +87,14 @@ triangulation, several representative constraint layouts.
 | Unconstrained Delaunay | **1.0×** | ~4.5× | ~11× |
 | Constrained Delaunay | **1.0×** | ~4.3× | — |
 
-[delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) is absent from the
-constrained row because it does not support constrained triangulation. It is
-included only as an optional benchmark dependency; Delaunay32 does not depend
-on it. The [Fade2D](https://www.geom.at/products/fade2d/) comparison used
-Fade2D 2.17.3 through its bulk insertion API.
+[delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) does not support
+constrained triangulation, so no result is shown for it in the constrained row.
+
+The [Fade2D](https://www.geom.at/products/fade2d/) results were measured with
+Fade2D 2.17.3 using its bulk insertion API.
+
+delaunator-cpp is included as a submodule solely for the optional benchmark.
+Delaunay32 itself does not depend on it.
 
 These ratios are intentionally approximate and remain machine- and
 workload-dependent. The repository includes a detailed benchmark comparing
