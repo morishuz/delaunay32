@@ -9,14 +9,14 @@ remain backward compatible within that minor release.
 The project version is declared once in the top-level `CMakeLists.txt`:
 
 ```cmake
-project(delaunay32 VERSION 0.5.1 LANGUAGES CXX)
+project(delaunay32 VERSION 0.6.0 LANGUAGES CXX)
 ```
 
 The generated CMake package configuration uses this value. Do not maintain a
 second version file unless another packaging system eventually requires it.
 
 Published releases use annotated Git tags named `vMAJOR.MINOR.PATCH`, for
-example `v0.5.1`. A release tag identifies an immutable release commit; create
+example `v0.6.0`. A release tag identifies an immutable release commit; create
 it only after the release changes are merged and CI is green.
 
 ## Release checklist
@@ -36,8 +36,8 @@ it only after the release changes are merged and CI is green.
    ```sh
    git switch main
    git pull --ff-only github main
-   git tag -a v0.5.1 -m "Delaunay32 0.5.1"
-   git push github v0.5.1
+   git tag -a v0.6.0 -m "Delaunay32 0.6.0"
+   git push github v0.6.0
    ```
 
 9. Create a GitHub Release from the tag, with a concise summary of API changes,

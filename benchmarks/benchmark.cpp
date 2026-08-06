@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunator_adapter.hpp"
 #include "support.hpp"
 
 #include "delaunay32/delaunay.hpp"
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -33,6 +31,21 @@ constexpr std::int32_t kBenchmarkDomain = 20000;
 constexpr std::size_t kParallelMinPoints = 50000;
 constexpr std::size_t kMaxParallelThreads = 256;
 
+void configure_triangulator(
+    Triangulator& triangulator,
+    std::size_t thread_count) {
+    TriangulationOptions options;
+    options.thread_count = thread_count;
+    triangulator.set_options(options);
+}
+
+std::vector<Triangle> triangulate_points(
+    Triangulator& triangulator,
+    const std::vector<Point>& points) {
+    triangulator.set_points(points);
+    return triangulator.triangulate().triangles;
+}
+
 enum class OutputFormat {
     Text,
     Markdown,
@@ -55,7 +68,6 @@ struct Row {
     bool reuse = true;
     double serial_ms = 0.0;
     double parallel_ms = 0.0;
-    double delaunator_ms = 0.0;
 };
 
 std::size_t automatic_thread_count(std::size_t point_count) {
@@ -216,11 +228,9 @@ std::pair<std::size_t, std::size_t> repetitions(
 void require_valid(
     const char* implementation,
     const std::vector<Point>& points,
-    const std::vector<Triangle>& candidate,
-    const std::vector<Triangle>& reference) {
+    const std::vector<Triangle>& candidate) {
     std::string error;
-    if (!benchmark_support::validate_against_reference(
-            points, candidate, reference, error)) {
+    if (!benchmark_support::validate_mesh(points, candidate, error)) {
         throw std::runtime_error(
             std::string(implementation) + " validation failed: " + error);
     }
@@ -234,84 +244,65 @@ Row benchmark_case(
     bool reuse,
     Triangulator& serial,
     Triangulator& parallel,
-    DelaunatorBaseline& delaunator,
     std::uint64_t& checksum) {
     std::vector<Point> points =
         benchmark_support::generate_points(
             dataset, point_count, seed, kBenchmarkDomain);
 
-    delaunator.prepare(points);
-    std::vector<Triangle> reference =
-        delaunator.triangulate_prepared();
-    std::vector<Triangle> serial_output = serial.triangulate_int(points);
+    std::vector<Triangle> serial_output =
+        triangulate_points(serial, points);
     std::vector<Triangle> parallel_output =
-        parallel.triangulate_int(points);
-    require_valid("serial Delaunay32", points, serial_output, reference);
-    require_valid("parallel Delaunay32", points, parallel_output, reference);
+        triangulate_points(parallel, points);
+    require_valid("serial Delaunay32", points, serial_output);
+    require_valid("automatic Delaunay32", points, parallel_output);
+    if (!benchmark_support::meshes_equal(
+            serial_output, parallel_output)) {
+        throw std::runtime_error(
+            "serial and automatic Delaunay32 meshes differ");
+    }
 
     const auto [warmups, iterations] = repetitions(point_count, quick);
     const auto run_serial = [&] {
         if (reuse) {
-            return serial.triangulate_int(points);
+            return triangulate_points(serial, points);
         }
-        Triangulator one_shot(1);
-        return one_shot.triangulate_int(points);
+        Triangulator one_shot;
+        configure_triangulator(one_shot, 1);
+        return triangulate_points(one_shot, points);
     };
     const auto run_parallel = [&] {
         if (reuse) {
-            return parallel.triangulate_int(points);
+            return triangulate_points(parallel, points);
         }
-        Triangulator one_shot(0);
-        return one_shot.triangulate_int(points);
+        Triangulator one_shot;
+        configure_triangulator(one_shot, 0);
+        return triangulate_points(one_shot, points);
     };
-    const auto run_delaunator = [&] {
-        return delaunator.triangulate_prepared();
-    };
-
     for (std::size_t i = 0; i < warmups; ++i) {
-        if (i % 3 == 0) {
+        if ((i & 1U) == 0) {
             measure_once(run_serial, serial_output, checksum);
             measure_once(run_parallel, parallel_output, checksum);
-            measure_once(run_delaunator, reference, checksum);
-        } else if (i % 3 == 1) {
-            measure_once(run_parallel, parallel_output, checksum);
-            measure_once(run_delaunator, reference, checksum);
-            measure_once(run_serial, serial_output, checksum);
         } else {
-            measure_once(run_delaunator, reference, checksum);
-            measure_once(run_serial, serial_output, checksum);
             measure_once(run_parallel, parallel_output, checksum);
+            measure_once(run_serial, serial_output, checksum);
         }
     }
 
     std::vector<double> serial_samples;
     std::vector<double> parallel_samples;
-    std::vector<double> delaunator_samples;
     serial_samples.reserve(iterations);
     parallel_samples.reserve(iterations);
-    delaunator_samples.reserve(iterations);
     for (std::size_t i = 0; i < iterations; ++i) {
-        if (i % 3 == 0) {
+        if ((i & 1U) == 0) {
             serial_samples.push_back(
                 measure_once(run_serial, serial_output, checksum));
             parallel_samples.push_back(
                 measure_once(run_parallel, parallel_output, checksum));
-            delaunator_samples.push_back(
-                measure_once(run_delaunator, reference, checksum));
-        } else if (i % 3 == 1) {
-            parallel_samples.push_back(
-                measure_once(run_parallel, parallel_output, checksum));
-            delaunator_samples.push_back(
-                measure_once(run_delaunator, reference, checksum));
-            serial_samples.push_back(
-                measure_once(run_serial, serial_output, checksum));
         } else {
-            delaunator_samples.push_back(
-                measure_once(run_delaunator, reference, checksum));
-            serial_samples.push_back(
-                measure_once(run_serial, serial_output, checksum));
             parallel_samples.push_back(
                 measure_once(run_parallel, parallel_output, checksum));
+            serial_samples.push_back(
+                measure_once(run_serial, serial_output, checksum));
         }
     }
 
@@ -324,25 +315,11 @@ Row benchmark_case(
         reuse,
         median(std::move(serial_samples)),
         median(std::move(parallel_samples)),
-        median(std::move(delaunator_samples)),
     };
 }
 
-double ratio(double numerator, double denominator) {
-    return numerator / denominator;
-}
-
-double geometric_mean(
-    const std::vector<Row>& rows,
-    bool parallel) {
-    double logarithm_sum = 0.0;
-    for (const Row& row : rows) {
-        logarithm_sum += std::log(
-            ratio(
-                parallel ? row.parallel_ms : row.serial_ms,
-                row.delaunator_ms));
-    }
-    return std::exp(logarithm_sum / static_cast<double>(rows.size()));
+double automatic_speedup(const Row& row) {
+    return row.serial_ms / row.parallel_ms;
 }
 
 void print_preamble(const Options& options) {
@@ -356,11 +333,10 @@ void print_preamble(const Options& options) {
         std::cout
             << "Median end-to-end triangulation time in milliseconds. "
                "Generation and validation are excluded; Delaunay32 input "
-               "ingestion and both implementations' triangle materialization "
-               "are included. Delaunator's double coordinates are prepared "
-               "outside timing. Delaunay32 lifecycle: "
+               "ingestion and triangle materialization are included. "
+               "Delaunay32 lifecycle: "
             << lifecycle
-            << ". Lower ratios are better. Automatic mode may "
+            << ". Automatic mode may "
                "fall back to one thread for small inputs. Detected hardware "
                "threads: "
             << hardware_threads << ". Coordinate domain: [0, "
@@ -368,10 +344,9 @@ void print_preamble(const Options& options) {
         return;
     }
     std::cout
-        << "Delaunay32 benchmark against Delaunator\n"
+        << "Delaunay32 benchmark\n"
         << "median end-to-end time; generation and validation excluded\n"
-        << "Delaunay32 ingestion and both output materializations included\n"
-        << "Delaunator input conversion excluded\n"
+        << "input ingestion and triangle materialization included\n"
         << "Delaunay32 lifecycle: " << lifecycle << '\n'
         << "coordinate domain: [0," << kBenchmarkDomain << ")^2\n"
         << "hardware threads: " << hardware_threads
@@ -382,13 +357,11 @@ void print_preamble(const Options& options) {
 }
 
 void print_rows(const std::vector<Row>& rows, OutputFormat format) {
-    const double serial_geomean = geometric_mean(rows, false);
-    const double parallel_geomean = geometric_mean(rows, true);
     if (format == OutputFormat::Csv) {
         std::cout
-            << "distribution,points,lifecycle,fast_1t_ms,fast_auto_ms,"
-               "auto_threads,delaunator_ms,fast_1t_over_delaunator,"
-               "fast_auto_over_delaunator,triangles,samples\n";
+            << "distribution,points,lifecycle,delaunay32_1t_ms,"
+               "delaunay32_auto_ms,auto_threads,auto_speedup,triangles,"
+               "samples\n";
         for (const Row& row : rows) {
             std::cout << benchmark_support::dataset_name(row.dataset) << ','
                       << row.points << ','
@@ -396,9 +369,7 @@ void print_rows(const std::vector<Row>& rows, OutputFormat format) {
                       << std::fixed
                       << std::setprecision(4) << row.serial_ms << ','
                       << row.parallel_ms << ',' << row.auto_threads << ','
-                      << row.delaunator_ms << ','
-                      << ratio(row.serial_ms, row.delaunator_ms) << ','
-                      << ratio(row.parallel_ms, row.delaunator_ms) << ','
+                      << automatic_speedup(row) << ','
                       << row.triangles << ',' << row.samples << '\n';
         }
         return;
@@ -408,25 +379,17 @@ void print_rows(const std::vector<Row>& rows, OutputFormat format) {
         std::cout
             << "| distribution | points | Delaunay32 1T ms | "
                "Delaunay32 auto ms | "
-               "threads | Delaunator ms | 1T / del | auto / del | "
-               "triangles |\n"
-            << "|:--|--:|--:|--:|--:|--:|--:|--:|--:|\n";
+               "threads | auto speedup | triangles |\n"
+            << "|:--|--:|--:|--:|--:|--:|--:|\n";
         for (const Row& row : rows) {
             std::cout << "| "
                       << benchmark_support::dataset_name(row.dataset)
                       << " | " << row.points << " | " << std::fixed
                       << std::setprecision(3) << row.serial_ms << " | "
                       << row.parallel_ms << " | " << row.auto_threads
-                      << " | " << row.delaunator_ms << " | "
-                      << ratio(row.serial_ms, row.delaunator_ms) << "x | "
-                      << ratio(row.parallel_ms, row.delaunator_ms)
+                      << " | " << automatic_speedup(row)
                       << "x | " << row.triangles << " |\n";
         }
-        std::cout << "\nGeometric mean: **"
-                  << std::fixed << std::setprecision(3)
-                  << serial_geomean << "x** (one thread), **"
-                  << parallel_geomean
-                  << "x** (automatic threads) versus Delaunator.\n";
         return;
     }
 
@@ -436,11 +399,9 @@ void print_rows(const std::vector<Row>& rows, OutputFormat format) {
         << std::setw(13) << "D32 1T"
         << std::setw(13) << "D32 auto"
         << std::setw(9) << "threads"
-        << std::setw(15) << "Delaunator"
-        << std::setw(11) << "1T/del"
-        << std::setw(11) << "auto/del"
+        << std::setw(13) << "speedup"
         << std::setw(13) << "triangles" << '\n'
-        << std::string(108, '-') << '\n';
+        << std::string(84, '-') << '\n';
     for (const Row& row : rows) {
         std::cout
             << std::left << std::setw(12)
@@ -450,18 +411,10 @@ void print_rows(const std::vector<Row>& rows, OutputFormat format) {
             << row.serial_ms
             << std::setw(13) << row.parallel_ms
             << std::setw(9) << row.auto_threads
-            << std::setw(15) << row.delaunator_ms
-            << std::setw(10) << ratio(row.serial_ms, row.delaunator_ms)
-            << 'x'
-            << std::setw(10) << ratio(row.parallel_ms, row.delaunator_ms)
-            << 'x'
+            << std::setw(12) << automatic_speedup(row) << 'x'
             << std::setw(13) << row.triangles << '\n';
     }
-    std::cout << std::string(108, '-') << '\n'
-              << "geometric mean vs Delaunator: 1T "
-              << std::fixed << std::setprecision(3)
-              << serial_geomean << "x, auto " << parallel_geomean
-              << "x (lower is faster)\n";
+    std::cout << std::string(84, '-') << '\n';
 }
 
 }  // namespace
@@ -473,9 +426,10 @@ int main(int argc, char** argv) {
             delaunay32::parse_options(argc, argv);
         delaunay32::print_preamble(options);
 
-        delaunay32::Triangulator serial(1);
-        delaunay32::Triangulator parallel(0);
-        delaunay32::DelaunatorBaseline delaunator;
+        delaunay32::Triangulator serial;
+        delaunay32::Triangulator parallel;
+        delaunay32::configure_triangulator(serial, 1);
+        delaunay32::configure_triangulator(parallel, 0);
         std::vector<delaunay32::Row> rows;
         rows.reserve(options.sizes.size() * 3);
         std::uint64_t checksum = 0;
@@ -502,7 +456,6 @@ int main(int argc, char** argv) {
                     options.reuse,
                     serial,
                     parallel,
-                    delaunator,
                     checksum));
             }
         }

@@ -4,7 +4,6 @@
 #include "internal.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -17,8 +16,7 @@ using detail::ThreadBarrier;
 
 // Public entry points, input normalization, and Morton ordering live here.
 
-Triangulator::Triangulator(std::size_t thread_count)
-    : thread_count_(thread_count) {}
+Triangulator::Triangulator() = default;
 
 Triangulator::~Triangulator() = default;
 
@@ -29,168 +27,6 @@ Triangulator& Triangulator::operator=(
     Triangulator&&) noexcept = default;
 
 namespace {
-
-struct FloatBounds {
-    double min_x = 0.0;
-    double min_y = 0.0;
-    double max_x = 0.0;
-    double max_y = 0.0;
-};
-
-struct FloatQuantizer {
-    double origin_x = 0.0;
-    double origin_y = 0.0;
-    double scale = 0.0;
-    double target_span = 0.0;
-    bool clamp_to_target = false;
-
-    double map(double value, double origin) const {
-        return (value - origin) * scale;
-    }
-
-    std::int32_t quantize(double value, double origin) const {
-        if (scale == 0.0) {
-            return 0;
-        }
-        double mapped = map(value, origin);
-        if (clamp_to_target) {
-            mapped = std::clamp(mapped, 0.0, target_span);
-            return static_cast<std::int32_t>(std::llround(mapped));
-        }
-        const double rounded = std::round(mapped);
-        if (!std::isfinite(rounded) ||
-            rounded < std::numeric_limits<std::int32_t>::min() ||
-            rounded > std::numeric_limits<std::int32_t>::max()) {
-            throw std::invalid_argument(
-                "quantized coordinate is outside the int32 range");
-        }
-        return static_cast<std::int32_t>(rounded);
-    }
-
-    double error(
-        double value,
-        double origin,
-        std::int32_t quantized) const {
-        if (scale == 0.0) {
-            return std::abs(value - origin);
-        }
-        return std::abs(
-                   map(value, origin) -
-                   static_cast<double>(quantized)) /
-               scale;
-    }
-};
-
-FloatBounds find_float_bounds(
-    const std::vector<FloatPoint>& points) {
-    const double first_x = points[0].x;
-    const double first_y = points[0].y;
-    if (!std::isfinite(first_x) || !std::isfinite(first_y)) {
-        throw std::invalid_argument(
-            "floating-point coordinates must be finite");
-    }
-
-    FloatBounds bounds{first_x, first_y, first_x, first_y};
-    for (std::size_t i = 1; i < points.size(); ++i) {
-        const double x = points[i].x;
-        const double y = points[i].y;
-        if (!std::isfinite(x) || !std::isfinite(y)) {
-            throw std::invalid_argument(
-                "floating-point coordinates must be finite");
-        }
-        bounds.min_x = std::min(bounds.min_x, x);
-        bounds.min_y = std::min(bounds.min_y, y);
-        bounds.max_x = std::max(bounds.max_x, x);
-        bounds.max_y = std::max(bounds.max_y, y);
-    }
-    return bounds;
-}
-
-FloatQuantizer make_float_quantizer(
-    const FloatBounds& bounds,
-    const QuantizationOptions& options) {
-    const double target_span =
-        static_cast<double>(Triangulator::kMaxCoordinateSpan);
-    if (!std::isfinite(options.max_coordinate_error) ||
-        options.max_coordinate_error < 0.0) {
-        throw std::invalid_argument(
-            "maximum coordinate error must be finite and nonnegative");
-    }
-    if (options.collision_policy !=
-            QuantizationCollisionPolicy::Allow &&
-        options.collision_policy !=
-            QuantizationCollisionPolicy::Reject) {
-        throw std::invalid_argument(
-            "unknown quantization collision policy");
-    }
-
-    switch (options.mode) {
-        case QuantizationMode::Automatic: {
-            const double maximum_span = std::max(
-                bounds.max_x - bounds.min_x,
-                bounds.max_y - bounds.min_y);
-            return {
-                bounds.min_x,
-                bounds.min_y,
-                maximum_span == 0.0
-                    ? 0.0
-                    : target_span / maximum_span,
-                target_span,
-                true,
-            };
-        }
-        case QuantizationMode::GridStep: {
-            if (!std::isfinite(options.grid_step) ||
-                options.grid_step <= 0.0) {
-                throw std::invalid_argument(
-                    "quantization grid step must be finite and positive");
-            }
-            const double scale = 1.0 / options.grid_step;
-            if (!std::isfinite(scale) || scale <= 0.0) {
-                throw std::invalid_argument(
-                    "quantization grid step produces an invalid scale");
-            }
-            return {
-                bounds.min_x,
-                bounds.min_y,
-                scale,
-                target_span,
-                false,
-            };
-        }
-        case QuantizationMode::FixedScale: {
-            if (!std::isfinite(options.origin_x) ||
-                !std::isfinite(options.origin_y)) {
-                throw std::invalid_argument(
-                    "fixed quantization origin must be finite");
-            }
-            if (!std::isfinite(options.scale) || options.scale <= 0.0 ||
-                !std::isfinite(1.0 / options.scale)) {
-                throw std::invalid_argument(
-                    "fixed quantization scale must be finite and positive");
-            }
-            return {
-                options.origin_x,
-                options.origin_y,
-                options.scale,
-                target_span,
-                false,
-            };
-        }
-    }
-    throw std::invalid_argument("unknown quantization mode");
-}
-
-QuantizationReport make_quantization_report(
-    const FloatQuantizer& quantizer) {
-    QuantizationReport report;
-    report.origin_x = quantizer.origin_x;
-    report.origin_y = quantizer.origin_y;
-    report.scale = quantizer.scale;
-    report.grid_step =
-        quantizer.scale == 0.0 ? 0.0 : 1.0 / quantizer.scale;
-    return report;
-}
 
 // Shared predicate-span checks for Int64 vs Int128 certification.
 template <typename UnsignedWide>
@@ -333,107 +169,129 @@ void Triangulator::load_int_points(const std::vector<Point>& points) {
     }
 }
 
-std::vector<Triangle> Triangulator::triangulate_int(
-    const std::vector<Point>& points) {
-    require_point_count(points.size());
-    load_int_points(points);
-    build_loaded_topology();
-    return finish_triangle_export();
+void Triangulator::set_options(TriangulationOptions options) {
+    if (options.result_detail != ResultDetail::Triangles &&
+        options.result_detail != ResultDetail::Full) {
+        throw std::invalid_argument("unknown result detail");
+    }
+    thread_count_ = options.thread_count;
+    result_detail_ = options.result_detail;
 }
 
-void Triangulator::load_float_points(
-    const std::vector<FloatPoint>& points,
-    const QuantizationOptions& options,
-    QuantizationReport* report) {
-    const FloatBounds bounds = find_float_bounds(points);
-    const FloatQuantizer quantizer =
-        make_float_quantizer(bounds, options);
-    QuantizationReport measured = make_quantization_report(quantizer);
-    const bool measure_error =
-        report != nullptr || options.max_coordinate_error > 0.0;
+void Triangulator::set_points(const std::vector<Point>& points) {
+    problem_ready_ = false;
+    constraints_.clear();
+    polygons_.clear();
+    triangles_out_.clear();
+    halfedges_out_.clear();
+    hull_out_.clear();
+    require_point_count(points.size());
+    input_point_count_ = points.size();
+    load_int_points(points);
+    problem_ready_ = true;
+}
 
-    points_.resize(points.size());
-    for (std::size_t i = 0; i < points.size(); ++i) {
-        const double input_x = points[i].x;
-        const double input_y = points[i].y;
-        const std::int32_t x = quantizer.quantize(
-            input_x, quantizer.origin_x);
-        const std::int32_t y = quantizer.quantize(
-            input_y, quantizer.origin_y);
-        if (i == 0) {
-            min_x_ = max_x_ = x;
-            min_y_ = max_y_ = y;
-        } else {
-            min_x_ = std::min(min_x_, x);
-            max_x_ = std::max(max_x_, x);
-            min_y_ = std::min(min_y_, y);
-            max_y_ = std::max(max_y_, y);
+void Triangulator::require_ready_problem() const {
+    if (!problem_ready_) {
+        throw std::logic_error(
+            "set_points() is required before configuring or triangulating");
+    }
+}
+
+void Triangulator::set_constraints(
+    std::vector<Constraint> constraints) {
+    require_ready_problem();
+    for (const Constraint constraint : constraints) {
+        if (constraint.i0 >= input_point_count_ ||
+            constraint.i1 >= input_point_count_) {
+            throw std::invalid_argument(
+                "constraint endpoint is outside the point array");
         }
-        points_[i] = {x, y, static_cast<std::uint32_t>(i), 0};
-        if (measure_error) {
-            measured.max_coordinate_error = std::max({
-                measured.max_coordinate_error,
-                quantizer.error(input_x, quantizer.origin_x, x),
-                quantizer.error(input_y, quantizer.origin_y, y),
-            });
+        if (constraint.i0 == constraint.i1) {
+            throw std::invalid_argument(
+                "constraint endpoints are coincident");
         }
     }
-    if (options.max_coordinate_error > 0.0 &&
-        measured.max_coordinate_error > options.max_coordinate_error) {
-        throw std::invalid_argument(
-            "quantization exceeds the requested maximum coordinate error");
+    constraints_ = std::move(constraints);
+}
+
+void Triangulator::set_polygons(
+    std::vector<PolygonDomain> polygons) {
+    require_ready_problem();
+    const auto validate_ring = [&](const std::vector<std::uint32_t>& ring) {
+        if (ring.size() < 3) {
+            throw std::invalid_argument(
+                "polygon rings need at least three indices");
+        }
+        for (const std::uint32_t index : ring) {
+            if (index >= input_point_count_) {
+                throw std::invalid_argument(
+                    "polygon ring index is outside the point array");
+            }
+        }
+    };
+    for (const PolygonDomain& polygon : polygons) {
+        validate_ring(polygon.outer_ring);
+        for (const std::vector<std::uint32_t>& hole : polygon.holes) {
+            validate_ring(hole);
+        }
     }
-    if (report != nullptr) {
-        *report = measured;
+    polygons_ = std::move(polygons);
+}
+
+TriangulationResult Triangulator::triangulate() {
+    require_ready_problem();
+    // A failed run is consumed as well: topology construction and constraint
+    // recovery mutate the loaded sites and edge arena in place.
+    problem_ready_ = false;
+
+    const bool need_representatives =
+        result_detail_ == ResultDetail::Full ||
+        !constraints_.empty() || !polygons_.empty();
+    std::vector<std::uint32_t> representatives;
+    const PredicateWidth predicate_width = build_loaded_topology(
+        need_representatives ? &representatives : nullptr);
+
+    if (!constraints_.empty() || !polygons_.empty()) {
+        build_constraint_indices(representatives, input_point_count_);
+        const auto domains = prepare_polygon_domains();
+        std::vector<Constraint> combined = constraints_;
+        std::size_t boundary_count = 0;
+        for (const auto& domain : domains) {
+            for (const auto& ring : domain) {
+                boundary_count += ring.size();
+            }
+        }
+        combined.reserve(combined.size() + boundary_count);
+        for (const auto& domain : domains) {
+            for (const auto& ring : domain) {
+                for (std::size_t i = 0; i < ring.size(); ++i) {
+                    combined.push_back({
+                        points_[ring[i]].original,
+                        points_[ring[(i + 1) % ring.size()]].original,
+                    });
+                }
+            }
+        }
+        recover_constraints(combined);
+        if (!domains.empty()) {
+            mark_polygon_excluded_faces(domains);
+        }
     }
-}
 
-std::vector<Triangle> Triangulator::triangulate_float(
-    const std::vector<FloatPoint>& points,
-    const QuantizationOptions& options) {
-    require_point_count(points.size());
-    load_float_points(points, options, nullptr);
-    build_loaded_topology(
-        nullptr,
-        options.collision_policy == QuantizationCollisionPolicy::Reject);
-    return finish_triangle_export();
-}
-
-TriangulationResult Triangulator::triangulate_int_full(
-    const std::vector<Point>& points) {
-    require_point_count(points.size());
-    load_int_points(points);
-    std::vector<std::uint32_t> representatives;
-    const PredicateWidth predicate_width =
-        build_loaded_topology(&representatives);
-    finish_full_export();
-    return make_result(
-        {}, predicate_width, std::move(representatives));
-}
-
-TriangulationResult Triangulator::triangulate_float_full(
-    const std::vector<FloatPoint>& points,
-    const QuantizationOptions& options) {
-    require_point_count(points.size());
-    QuantizationReport report;
-    load_float_points(points, options, &report);
-    std::vector<std::uint32_t> representatives;
-    const PredicateWidth predicate_width =
-        build_loaded_topology(
-            &representatives,
-            options.collision_policy == QuantizationCollisionPolicy::Reject);
-    finish_full_export();
-    report.unique_points = points_.size();
-    report.collapsed_points = points.size() - points_.size();
-    return make_result(
-        report,
-        predicate_width,
-        std::move(representatives));
+    if (result_detail_ == ResultDetail::Full) {
+        finish_full_export();
+    } else {
+        finish_triangle_export();
+        representatives.clear();
+        halfedges_out_.clear();
+        hull_out_.clear();
+    }
+    return make_result(predicate_width, std::move(representatives));
 }
 
 PredicateWidth Triangulator::build_loaded_topology(
-    std::vector<std::uint32_t>* representatives,
-    bool reject_duplicates) {
+    std::vector<std::uint32_t>* representatives) {
     std::size_t point_count = points_.size();
     if (representatives != nullptr) {
         representatives->resize(point_count);
@@ -579,10 +437,6 @@ PredicateWidth Triangulator::build_loaded_topology(
         if (wide_predicates) {
             wide_lifts_.resize(unique_count);
         }
-    }
-    if (reject_duplicates && unique_count != point_count) {
-        throw std::invalid_argument(
-            "quantization produced coincident points");
     }
     if (unique_count < 3) {
         throw std::invalid_argument("need at least 3 unique points");

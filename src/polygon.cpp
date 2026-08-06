@@ -17,21 +17,6 @@ using SiteIndex = std::uint32_t;
 using Ring = std::vector<SiteIndex>;
 using Rings = std::vector<Ring>;
 
-void require_ring_indices(
-    const std::vector<std::uint32_t>& ring,
-    std::size_t point_count) {
-    if (ring.size() < 3) {
-        throw std::invalid_argument(
-            "polygon rings need at least three indices");
-    }
-    for (const std::uint32_t index : ring) {
-        if (index >= point_count) {
-            throw std::invalid_argument(
-                "polygon ring index is outside the point array");
-        }
-    }
-}
-
 Ring map_ring_indices(
     const std::vector<std::uint32_t>& input,
     const std::vector<std::uint32_t>& original_to_site) {
@@ -289,6 +274,47 @@ Triangulator::prepare_polygon_rings(
     return rings;
 }
 
+std::vector<std::vector<std::vector<std::uint32_t>>>
+Triangulator::prepare_polygon_domains() const {
+    std::vector<Rings> domains;
+    domains.reserve(polygons_.size());
+    for (const PolygonDomain& polygon : polygons_) {
+        domains.push_back(prepare_polygon_rings(
+            polygon.outer_ring, polygon.holes));
+    }
+
+    const auto orientation = [&](SiteIndex a, SiteIndex b, SiteIndex c) {
+        return orient(a, b, c);
+    };
+    for (std::size_t first = 0; first < domains.size(); ++first) {
+        const Ring& first_outer = domains[first].front();
+        for (std::size_t second = first + 1;
+             second < domains.size();
+             ++second) {
+            const Ring& second_outer = domains[second].front();
+            if (rings_intersect_or_touch(
+                    points_,
+                    orientation,
+                    first_outer,
+                    second_outer) ||
+                point_in_ring(
+                    points_,
+                    orientation,
+                    first_outer.front(),
+                    second_outer) ||
+                point_in_ring(
+                    points_,
+                    orientation,
+                    second_outer.front(),
+                    first_outer)) {
+                throw std::invalid_argument(
+                    "polygon outer domains overlap, nest, or touch");
+            }
+        }
+    }
+    return domains;
+}
+
 std::uint32_t Triangulator::first_boundary_edge(
     std::uint32_t origin,
     std::uint32_t destination) const {
@@ -304,7 +330,7 @@ std::uint32_t Triangulator::first_boundary_edge(
 }
 
 void Triangulator::mark_polygon_excluded_faces(
-    const std::vector<std::vector<std::uint32_t>>& rings) {
+    const std::vector<Rings>& domains) {
     std::vector<std::uint8_t> excluded(edge_constrained_.size(), 0);
 
     const auto exclude_component = [&](std::uint32_t initial_seed) {
@@ -345,11 +371,13 @@ void Triangulator::mark_polygon_excluded_faces(
     };
 
     exclude_component(outer_seed_);
-    for (std::size_t hole = 1; hole < rings.size(); ++hole) {
-        const std::vector<std::uint32_t>& ring = rings[hole];
-        // Holes are normalized clockwise, so their interior is the right face
-        // of every directed boundary edge.
-        exclude_component(sym(first_boundary_edge(ring[0], ring[1])));
+    for (const Rings& rings : domains) {
+        for (std::size_t hole = 1; hole < rings.size(); ++hole) {
+            const Ring& ring = rings[hole];
+            // Holes are normalized clockwise, so their interior is the right
+            // face of every directed boundary edge.
+            exclude_component(sym(first_boundary_edge(ring[0], ring[1])));
+        }
     }
 
     for (const EdgeRange range : edge_ranges_) {
@@ -361,41 +389,6 @@ void Triangulator::mark_polygon_excluded_faces(
             }
         }
     }
-}
-
-std::vector<Triangle> Triangulator::triangulate_polygon_int(
-    const std::vector<Point>& points,
-    const std::vector<std::uint32_t>& outer_ring,
-    const std::vector<std::vector<std::uint32_t>>& holes) {
-    require_point_count(points.size());
-    require_ring_indices(outer_ring, points.size());
-    for (const std::vector<std::uint32_t>& hole : holes) {
-        require_ring_indices(hole, points.size());
-    }
-    load_int_points(points);
-    std::vector<std::uint32_t> representatives;
-    build_loaded_topology(&representatives);
-    build_constraint_indices(representatives, points.size());
-    const std::vector<std::vector<std::uint32_t>> rings =
-        prepare_polygon_rings(outer_ring, holes);
-
-    std::vector<Constraint> boundaries;
-    std::size_t boundary_count = 0;
-    for (const std::vector<std::uint32_t>& ring : rings) {
-        boundary_count += ring.size();
-    }
-    boundaries.reserve(boundary_count);
-    for (const std::vector<std::uint32_t>& ring : rings) {
-        for (std::size_t i = 0; i < ring.size(); ++i) {
-            boundaries.push_back({
-                points_[ring[i]].original,
-                points_[ring[(i + 1) % ring.size()]].original,
-            });
-        }
-    }
-    recover_constraints(boundaries);
-    mark_polygon_excluded_faces(rings);
-    return finish_triangle_export();
 }
 
 }  // namespace delaunay32

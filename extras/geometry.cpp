@@ -4,6 +4,7 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -100,6 +101,63 @@ RingLocation locate_in_ring(
     return inside ? RingLocation::inside : RingLocation::outside;
 }
 
+long double orient(
+    const FloatPoint& a,
+    const FloatPoint& b,
+    const FloatPoint& point) {
+    return
+        (static_cast<long double>(b.x) - a.x) *
+            (static_cast<long double>(point.y) - a.y) -
+        (static_cast<long double>(b.y) - a.y) *
+            (static_cast<long double>(point.x) - a.x);
+}
+
+bool point_on_segment(
+    const FloatPoint& point,
+    const FloatPoint& a,
+    const FloatPoint& b) {
+    if (orient(a, b, point) != 0.0L) {
+        return false;
+    }
+    return point.x >= std::min(a.x, b.x) &&
+           point.x <= std::max(a.x, b.x) &&
+           point.y >= std::min(a.y, b.y) &&
+           point.y <= std::max(a.y, b.y);
+}
+
+RingLocation locate_in_ring(
+    const FloatPoint& point,
+    const std::vector<std::uint32_t>& ring,
+    const std::vector<FloatPoint>& points) {
+    bool inside = false;
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        const FloatPoint& a = points[ring[i]];
+        const FloatPoint& b = points[ring[(i + 1) % ring.size()]];
+        if (point_on_segment(point, a, b)) {
+            return RingLocation::boundary;
+        }
+        if ((a.y > point.y) != (b.y > point.y)) {
+            const long double side = orient(a, b, point);
+            const bool crosses_to_right =
+                (b.y > a.y && side > 0.0L) ||
+                (b.y < a.y && side < 0.0L);
+            if (crosses_to_right) {
+                inside = !inside;
+            }
+        }
+    }
+    return inside ? RingLocation::inside : RingLocation::outside;
+}
+
+void validate_finite(const std::vector<FloatPoint>& points) {
+    for (const FloatPoint& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+            throw std::invalid_argument(
+                "floating-point polygon coordinates must be finite");
+        }
+    }
+}
+
 }  // namespace
 
 namespace detail {
@@ -134,12 +192,42 @@ bool point_is_strictly_inside_domain_unchecked(
     return true;
 }
 
+bool point_is_strictly_inside_domain_unchecked(
+    const FloatPoint& point,
+    const PolygonDomain& domain,
+    const std::vector<FloatPoint>& points) {
+    if (locate_in_ring(point, domain.outer_ring, points) !=
+        RingLocation::inside) {
+        return false;
+    }
+    for (const std::vector<std::uint32_t>& hole : domain.holes) {
+        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace detail
 
 bool point_is_strictly_inside_domain(
     const Point& point,
     const PolygonDomain& domain,
     const std::vector<Point>& points) {
+    detail::validate_domain(domain, points.size(), "polygon");
+    return detail::point_is_strictly_inside_domain_unchecked(
+        point, domain, points);
+}
+
+bool point_is_strictly_inside_domain(
+    const FloatPoint& point,
+    const PolygonDomain& domain,
+    const std::vector<FloatPoint>& points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        throw std::invalid_argument(
+            "floating-point query coordinate must be finite");
+    }
+    validate_finite(points);
     detail::validate_domain(domain, points.size(), "polygon");
     return detail::point_is_strictly_inside_domain_unchecked(
         point, domain, points);

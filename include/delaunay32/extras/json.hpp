@@ -12,6 +12,7 @@ namespace delaunay32::extras {
 // general-purpose JSON API: unknown fields and non-integer geometry values are
 // rejected deliberately.
 Geometry read_geometry_json(const std::string& input_path);
+std::string geometry_to_json(const Geometry& geometry);
 void write_geometry_json(
     const std::string& output_path,
     const Geometry& geometry);

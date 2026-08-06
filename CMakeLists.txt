@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(delaunay32 VERSION 0.5.1 LANGUAGES CXX)
+project(delaunay32 VERSION 0.6.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -13,22 +13,24 @@ endif()
 
 option(
     DELAUNAY32_BUILD_BENCHMARKS
-    "Build the validated Delaunator comparison"
-    ${DELAUNAY32_TOP_LEVEL})
-option(
-    DELAUNAY32_BUILD_EXAMPLES
-    "Build the dependency-free SVG examples"
+    "Build the standalone performance benchmark"
     ${DELAUNAY32_TOP_LEVEL})
 option(
     DELAUNAY32_BUILD_EXTRAS
     "Build the optional sampling, geometry JSON, and SVG companion library"
     ON)
 option(
+    DELAUNAY32_BUILD_EXAMPLES
+    "Build the example programs"
+    ${DELAUNAY32_TOP_LEVEL})
+option(
     DELAUNAY32_BUILD_TESTS
     "Build the validation suite"
     ${DELAUNAY32_TOP_LEVEL})
 
-if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+if(DELAUNAY32_TOP_LEVEL AND
+   NOT CMAKE_CONFIGURATION_TYPES AND
+   NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
@@ -56,6 +58,7 @@ set(DELAUNAY32_LIBRARY_SOURCES
     src/export.cpp
     src/internal.hpp
     src/polygon.cpp
+    src/quantization.cpp
     src/result.cpp
     src/topology.cpp
     src/worker_team.cpp
@@ -96,99 +99,65 @@ endif()
 if(DELAUNAY32_BUILD_EXAMPLES)
     if(NOT DELAUNAY32_BUILD_EXTRAS)
         message(FATAL_ERROR
-            "DELAUNAY32_BUILD_EXAMPLES requires DELAUNAY32_BUILD_EXTRAS")
+            "DELAUNAY32_BUILD_EXAMPLES requires "
+            "DELAUNAY32_BUILD_EXTRAS=ON")
     endif()
-    add_library(
-        delaunay32_example_support STATIC
-        examples/example_cli.cpp
-        examples/example_cli.hpp
-        examples/presentation_svg.cpp
-        examples/presentation_svg.hpp
-    )
-    target_link_libraries(
-        delaunay32_example_support PUBLIC delaunay32::extras)
-    delaunay32_enable_warnings(delaunay32_example_support)
-
-    add_executable(
-        delaunay_svg_example
-        examples/delaunay_svg_example.cpp)
-    target_link_libraries(
-        delaunay_svg_example PRIVATE delaunay32_example_support)
-    delaunay32_enable_warnings(delaunay_svg_example)
-
-    add_executable(
-        delaunay_float_example
-        examples/delaunay_float_example.cpp)
-    target_link_libraries(
-        delaunay_float_example PRIVATE delaunay32_example_support)
-    delaunay32_enable_warnings(delaunay_float_example)
-
-    add_executable(
-        delaunay_constrained_example
-        examples/delaunay_constrained_example.cpp)
-    target_link_libraries(
-        delaunay_constrained_example PRIVATE delaunay32_example_support)
-    delaunay32_enable_warnings(delaunay_constrained_example)
-
-    add_executable(
-        delaunay_polygon_example
-        examples/delaunay_polygon_example.cpp)
-    target_link_libraries(
-        delaunay_polygon_example PRIVATE delaunay32_example_support)
-    delaunay32_enable_warnings(delaunay_polygon_example)
-
     add_executable(
         delaunay32_logo_polygon_example
         examples/delaunay32_logo_polygon_example.cpp)
     target_link_libraries(
-        delaunay32_logo_polygon_example PRIVATE delaunay32_example_support)
+        delaunay32_logo_polygon_example PRIVATE delaunay32::extras)
+    target_compile_definitions(
+        delaunay32_logo_polygon_example
+        PRIVATE
+            DELAUNAY32_LOGO_INPUT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/examples/data/delaunay32_logo.json")
     delaunay32_enable_warnings(delaunay32_logo_polygon_example)
-endif()
 
-set(DELAUNATOR_HEADER
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/delaunator-cpp/include/delaunator.hpp")
-if(DELAUNAY32_BUILD_BENCHMARKS OR DELAUNAY32_BUILD_TESTS)
-    if(NOT EXISTS "${DELAUNATOR_HEADER}")
-        message(FATAL_ERROR
-            "Delaunator submodule is missing. Run: "
-            "git submodule update --init --recursive")
-    endif()
+    add_executable(
+        delaunay32_hello_mesh_example
+        examples/delaunay32_hello_mesh_example.cpp)
+    target_link_libraries(
+        delaunay32_hello_mesh_example PRIVATE delaunay32::extras)
+    delaunay32_enable_warnings(delaunay32_hello_mesh_example)
 
-    add_library(delaunator_baseline STATIC
-        benchmarks/delaunator_adapter.cpp
-        benchmarks/delaunator_adapter.hpp
-    )
-    target_compile_features(delaunator_baseline PUBLIC cxx_std_17)
-    target_include_directories(delaunator_baseline
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_include_directories(
-        delaunator_baseline
-        SYSTEM PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/delaunator-cpp/include)
-    delaunay32_enable_warnings(delaunator_baseline)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-        target_compile_options(
-            delaunator_baseline PRIVATE -Wno-unused-but-set-variable)
-    endif()
+    add_executable(
+        delaunay32_quantization_example
+        examples/delaunay32_quantization_example.cpp)
+    target_link_libraries(
+        delaunay32_quantization_example PRIVATE delaunay32::extras)
+    delaunay32_enable_warnings(delaunay32_quantization_example)
+
+    add_executable(
+        delaunay32_constraints_example
+        examples/delaunay32_constraints_example.cpp)
+    target_link_libraries(
+        delaunay32_constraints_example PRIVATE delaunay32::extras)
+    delaunay32_enable_warnings(delaunay32_constraints_example)
+
+    add_executable(
+        delaunay32_polygon_example
+        examples/delaunay32_polygon_example.cpp)
+    target_link_libraries(
+        delaunay32_polygon_example PRIVATE delaunay32::extras)
+    delaunay32_enable_warnings(delaunay32_polygon_example)
 endif()
 
 if(DELAUNAY32_BUILD_BENCHMARKS)
     add_executable(delaunay_benchmark benchmarks/benchmark.cpp)
     target_link_libraries(
         delaunay_benchmark
-        PRIVATE delaunay32::delaunay32 delaunator_baseline)
+        PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_benchmark)
 endif()
 
 if(DELAUNAY32_BUILD_TESTS)
     enable_testing()
     add_executable(delaunay_tests tests/validation.cpp)
+    target_include_directories(
+        delaunay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
     target_link_libraries(
         delaunay_tests
-        PRIVATE delaunay32::delaunay32 delaunator_baseline)
+        PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_tests)
     add_test(NAME validation COMMAND delaunay_tests)
 
@@ -205,6 +174,34 @@ if(DELAUNAY32_BUILD_TESTS)
                     "${CMAKE_CURRENT_BINARY_DIR}/extras-roundtrip.json"
                     "${CMAKE_CURRENT_BINARY_DIR}/extras-mesh.svg"
                     "${CMAKE_CURRENT_BINARY_DIR}/extras-polygon.svg")
+    endif()
+
+    if(DELAUNAY32_BUILD_EXAMPLES)
+        add_test(
+            NAME example_hello_mesh
+            COMMAND delaunay32_hello_mesh_example)
+        add_test(
+            NAME example_quantization
+            COMMAND delaunay32_quantization_example)
+        add_test(
+            NAME example_constraints
+            COMMAND delaunay32_constraints_example)
+        add_test(
+            NAME example_polygon
+            COMMAND delaunay32_polygon_example)
+        add_test(
+            NAME example_logo_polygon
+            COMMAND
+                delaunay32_logo_polygon_example
+                "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/delaunay32_logo.json"
+                "${CMAKE_CURRENT_BINARY_DIR}/example-logo-polygon.svg")
+        set_tests_properties(
+            example_hello_mesh
+            example_quantization
+            example_constraints
+            example_polygon
+            example_logo_polygon
+            PROPERTIES LABELS examples)
     endif()
 
     add_executable(
@@ -252,45 +249,6 @@ if(DELAUNAY32_BUILD_TESTS)
         COMMAND delaunay_parallel_fallback_tests)
     set_tests_properties(parallel_arena_fallback PROPERTIES TIMEOUT 300)
 
-    if(DELAUNAY32_BUILD_EXAMPLES)
-        add_test(
-            NAME svg_example
-            COMMAND delaunay_svg_example 100
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-smoke.svg" 42)
-        add_test(
-            NAME svg_example_json
-            COMMAND delaunay_svg_example
-                    --input
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_points.json"
-                    --output
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-json-smoke.svg")
-        add_test(
-            NAME svg_example_json_collinear
-            COMMAND delaunay_svg_example
-                    --input
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/svg_collinear.json"
-                    --output
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-collinear-smoke.svg")
-        add_test(
-            NAME constrained_svg_example
-            COMMAND delaunay_constrained_example
-                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/constrained.json"
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-constrained-smoke.svg")
-        add_test(
-            NAME polygon_svg_example
-            COMMAND delaunay_polygon_example
-                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/polygon.json"
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-polygon-smoke.svg")
-        add_test(
-            NAME logo_polygon_svg_example
-            COMMAND delaunay32_logo_polygon_example
-                    "${CMAKE_CURRENT_SOURCE_DIR}/examples/data/delaunay32_logo.json"
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-logo-polygon-smoke.svg")
-        add_test(
-            NAME float_svg_example
-            COMMAND delaunay_float_example
-                    "${CMAKE_CURRENT_BINARY_DIR}/mesh-float-smoke.svg")
-    endif()
 endif()
 
 set(DELAUNAY32_INSTALL_TARGETS delaunay32)
@@ -305,7 +263,9 @@ install(
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(
-    FILES include/delaunay32/delaunay.hpp
+    FILES
+        include/delaunay32/delaunay.hpp
+        include/delaunay32/quantization.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/delaunay32
 )
 if(DELAUNAY32_BUILD_EXTRAS)

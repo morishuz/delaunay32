@@ -20,4 +20,9 @@ bool point_is_strictly_inside_domain_unchecked(
     const PolygonDomain& domain,
     const std::vector<Point>& points);
 
+bool point_is_strictly_inside_domain_unchecked(
+    const FloatPoint& point,
+    const PolygonDomain& domain,
+    const std::vector<FloatPoint>& points);
+
 }  // namespace delaunay32::extras::detail

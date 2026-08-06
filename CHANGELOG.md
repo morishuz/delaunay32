@@ -3,7 +3,81 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.6.0 - 2026-08-06
+
+### Added
+
+- A stateful integer-only `Triangulator` configured with `set_options()`,
+  `set_points()`, `set_constraints()`, and `set_polygons()`, followed by one
+  owning `TriangulationResult` from `triangulate()`.
+- `TriangulationOptions`, `ResultDetail`, and `TriangulationReport`. Triangle
+  output remains the default; full detail additionally returns halfedges, the
+  complete input hull, and duplicate representatives.
+- A standalone `delaunay32/quantization.hpp` API. `quantize()` explicitly maps
+  `FloatPoint` input to an index-preserving `std::vector<Point>` and returns a
+  separate error and collision report.
+- Batched disjoint polygon domains and support for standalone constraints in
+  the same polygon-clipped run.
+- A composable `extras::Svg` document with auto-fit or explicit transforms,
+  styled point and line primitives, indexed polygons with holes, triangle
+  batches, deterministic edge-adjacent triangle coloring, text, in-memory
+  rendering, and file output. The existing one-call mesh exporters now use
+  the same drawing API.
+- `geometry_to_json()` for validated in-memory serialization using the same
+  formatted geometry schema as `write_geometry_json()`.
+- A stateful float-only `extras::PointSampler` with deterministic uniform and
+  boundary-aware blue-noise generation over rectangular bounds or indexed
+  polygon interiors.
+- Five focused examples, built through `DELAUNAY32_BUILD_EXAMPLES`, covering
+  basic meshes, quantization, constraints, polygons with holes, and a batched
+  multi-domain logo.
+- Lifecycle, result-detail, report, quantization, moved-instance, batched
+  polygon, mixed-constraint, installed-package, stress, fallback, and example
+  smoke-test coverage for the new contract.
+
+### Changed
+
+- The core triangulator now accepts signed 32-bit integer points exclusively.
+  Floating-point conversion is an explicit preprocessing operation and never
+  a triangulator overload.
+- A run builds the unconstrained topology once, recovers standalone
+  constraints and all polygon boundaries together, legalizes once, clips the
+  disjoint domain union once, and exports one combined triangle vector.
+- `PolygonDomain` is now a core type. Touching, overlapping, and nested outer
+  domains are rejected; existing per-domain hole validation remains in force.
+- Each configured problem is consumed by `triangulate()`, including failed
+  runs. `set_points()` starts the next problem and clears geometry and run
+  state while preserving options, allocations, and worker threads.
+- Full polygon results use `-1` halfedges across every clipped boundary while
+  preserving `hull` as the convex hull of the complete unique input set.
+- `FloatPoint` coordinates now use double precision, allowing every signed
+  32-bit integer coordinate to be represented exactly before quantization.
+- Uniform sampling no longer injects rectangle corners by default; callers can
+  request them explicitly with `include_bounds_corners`.
+- The benchmark now measures Delaunay32 one-thread and automatic modes across
+  its three point distributions without an embedded competitor baseline.
+- Randomized validation uses exact mesh invariants and serial/parallel result
+  agreement without an external triangulation implementation.
+- Package metadata and installed-package consumers now target version 0.6.0.
+
+### Removed
+
+- The overload-based `triangulate_int()`, `triangulate_float()`,
+  `triangulate_int_full()`, `triangulate_float_full()`,
+  `triangulate_constrained_int()`, and `triangulate_polygon_int()` entry
+  points. There are no compatibility wrappers for this pre-1.0 breaking
+  release.
+- The former integer and floating-point free sampling functions and their
+  option structs. Sampling is now configured through `PointSampler` and always
+  returns `FloatPoint`.
+- The Delaunator adapter, Git submodule, build target, and benchmark columns.
+
+### Fixed
+
+- Automatic quantization now rejects coordinate sets whose double-precision
+  span overflows instead of silently collapsing the complete input.
+- Embedded CMake builds no longer force the parent project to use the Release
+  build type.
 
 ## 0.5.1 - 2026-08-04
 

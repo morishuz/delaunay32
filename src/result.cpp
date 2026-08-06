@@ -38,9 +38,18 @@ void Triangulator::prepare_full_export() {
     do {
         const std::uint32_t next = lnext(outer);
         edge_origin_[outer] |= kVisitedBit;
-        edge_next_[outer] = kDeletedEdge;
         outer = next;
     } while (outer != outer_seed_);
+
+    // Once the outer face has been marked, face traversal uses edge_prev_.
+    // Reset the complete dense map so clipped/excluded opposite darts resolve
+    // to -1 just like convex-hull opposites.
+    for (const EdgeRange range : edge_ranges_) {
+        std::fill(
+            edge_next_.begin() + range.first,
+            edge_next_.begin() + range.last,
+            kDeletedEdge);
+    }
 }
 
 void Triangulator::export_hull() {
@@ -246,7 +255,6 @@ void Triangulator::finish_full_export() {
 }
 
 TriangulationResult Triangulator::make_result(
-    const QuantizationReport& quantization,
     PredicateWidth predicate_width,
     std::vector<std::uint32_t>&& representatives) {
     TriangulationResult result;
@@ -254,9 +262,11 @@ TriangulationResult Triangulator::make_result(
     result.halfedges = std::move(halfedges_out_);
     result.hull = std::move(hull_out_);
     result.representatives = std::move(representatives);
-    result.quantization = quantization;
-    result.predicate_width = predicate_width;
-    result.actual_thread_count = active_thread_count_;
+    result.report.predicate_width = predicate_width;
+    result.report.actual_thread_count = active_thread_count_;
+    result.report.input_points = input_point_count_;
+    result.report.unique_points = points_.size();
+    result.report.collapsed_points = input_point_count_ - points_.size();
     return result;
 }
 

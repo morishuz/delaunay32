@@ -19,23 +19,43 @@ void require(bool condition, const std::string& message) {
     }
 }
 
+void configure(
+    delaunay32::Triangulator& triangulator,
+    std::size_t thread_count,
+    delaunay32::ResultDetail detail =
+        delaunay32::ResultDetail::Triangles) {
+    delaunay32::TriangulationOptions options;
+    options.thread_count = thread_count;
+    options.result_detail = detail;
+    triangulator.set_options(options);
+}
+
+std::vector<delaunay32::Triangle> triangulate(
+    delaunay32::Triangulator& triangulator,
+    const std::vector<delaunay32::Point>& points) {
+    triangulator.set_points(points);
+    return triangulator.triangulate().triangles;
+}
+
 void require_fallback_matches(
     const std::vector<delaunay32::Point>& points,
     const std::string& label) {
     using delaunay32::Triangle;
     namespace support = delaunay32::benchmark_support;
 
-    delaunay32::Triangulator serial(1);
-    const std::vector<Triangle> expected = serial.triangulate_int(points);
+    delaunay32::Triangulator serial;
+    configure(serial, 1);
+    const std::vector<Triangle> expected = triangulate(serial, points);
 
     // This executable links a private library variant with an arena large
     // enough to build substantial partial topology but too small to finish
     // this input. A successful result therefore proves that the partial
     // topology was discarded and the input was rebuilt through the growable
     // serial allocator.
-    delaunay32::Triangulator parallel_with_fallback(2);
+    delaunay32::Triangulator parallel_with_fallback;
+    configure(parallel_with_fallback, 2);
     const std::vector<Triangle> candidate =
-        parallel_with_fallback.triangulate_int(points);
+        triangulate(parallel_with_fallback, points);
     require(
         support::meshes_equal(expected, candidate),
         label + ": serial fallback produced a different triangle set");
@@ -47,13 +67,18 @@ void require_fallback_matches(
             validation_error);
 
     const std::vector<Triangle> repeated =
-        parallel_with_fallback.triangulate_int(points);
+        triangulate(parallel_with_fallback, points);
     require(
         support::meshes_equal(expected, repeated),
         label + ": reused triangulator produced a different fallback mesh");
 
+    configure(
+        parallel_with_fallback,
+        2,
+        delaunay32::ResultDetail::Full);
+    parallel_with_fallback.set_points(points);
     const delaunay32::TriangulationResult full =
-        parallel_with_fallback.triangulate_int_full(points);
+        parallel_with_fallback.triangulate();
     require(
         support::meshes_equal(expected, full.triangles),
         label + ": full result changed the fallback mesh");
@@ -63,7 +88,7 @@ void require_fallback_matches(
             full.representatives.size() == points.size(),
         label + ": full fallback result omitted auxiliary data");
     require(
-        full.actual_thread_count == 1,
+        full.report.actual_thread_count == 1,
         label + ": full result did not report serial fallback execution");
 }
 

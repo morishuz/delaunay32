@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <limits>
 #include <random>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -225,6 +224,57 @@ inline std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
     return (static_cast<std::uint64_t>(a) << 32U) | b;
 }
 
+inline std::vector<std::uint32_t> convex_hull_indices(
+    const std::vector<Point>& points) {
+    std::vector<std::uint32_t> sorted(points.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        sorted[i] = static_cast<std::uint32_t>(i);
+    }
+    std::sort(
+        sorted.begin(),
+        sorted.end(),
+        [&](std::uint32_t lhs, std::uint32_t rhs) {
+            if (points[lhs].x != points[rhs].x) {
+                return points[lhs].x < points[rhs].x;
+            }
+            if (points[lhs].y != points[rhs].y) {
+                return points[lhs].y < points[rhs].y;
+            }
+            return lhs < rhs;
+        });
+    if (sorted.size() <= 1) {
+        return sorted;
+    }
+
+    const auto append = [&](std::vector<std::uint32_t>& half,
+                            std::uint32_t index) {
+        while (half.size() >= 2 &&
+               orient(
+                   points[half[half.size() - 2]],
+                   points[half.back()],
+                   points[index]) < 0) {
+            half.pop_back();
+        }
+        half.push_back(index);
+    };
+
+    std::vector<std::uint32_t> lower;
+    std::vector<std::uint32_t> upper;
+    lower.reserve(sorted.size());
+    upper.reserve(sorted.size());
+    for (const std::uint32_t index : sorted) {
+        append(lower, index);
+    }
+    for (auto iterator = sorted.rbegin(); iterator != sorted.rend();
+         ++iterator) {
+        append(upper, *iterator);
+    }
+    lower.pop_back();
+    upper.pop_back();
+    lower.insert(lower.end(), upper.begin(), upper.end());
+    return lower;
+}
+
 inline bool validate_mesh(
     const std::vector<Point>& points,
     const std::vector<Triangle>& triangles,
@@ -234,6 +284,7 @@ inline bool validate_mesh(
     canonical.reserve(triangles.size());
     std::unordered_map<std::uint64_t, EdgeRecord> edges;
     edges.reserve(triangles.size() * 2);
+    Exact mesh_twice_area = 0;
 
     const auto add_edge =
         [&](std::uint32_t a,
@@ -248,6 +299,12 @@ inline bool validate_mesh(
             EdgeRecord& edge = iterator->second;
             if (edge.count != 1) {
                 error = "mesh contains a non-manifold edge";
+                return false;
+            }
+            if (edge.a != b || edge.b != a) {
+                error =
+                    "adjacent triangles traverse a shared edge in the same "
+                    "direction";
                 return false;
             }
             edge.count = 2;
@@ -275,13 +332,15 @@ inline bool validate_mesh(
             error = "triangle repeats a vertex";
             return false;
         }
-        if (orient(
-                points[triangle.i0],
-                points[triangle.i1],
-                points[triangle.i2]) == 0) {
-            error = "triangle is degenerate";
+        const Exact twice_area = orient(
+            points[triangle.i0],
+            points[triangle.i1],
+            points[triangle.i2]);
+        if (twice_area <= 0) {
+            error = "triangle is degenerate or clockwise";
             return false;
         }
+        mesh_twice_area += twice_area;
         used[triangle.i0] = true;
         used[triangle.i1] = true;
         used[triangle.i2] = true;
@@ -319,29 +378,50 @@ inline bool validate_mesh(
         error = "mesh does not reference every input point";
         return false;
     }
-    return true;
-}
 
-inline bool validate_against_reference(
-    const std::vector<Point>& points,
-    const std::vector<Triangle>& candidate,
-    const std::vector<Triangle>& reference,
-    std::string& error) {
-    if (meshes_equal(candidate, reference)) {
-        return true;
-    }
-    if (candidate.size() != reference.size()) {
-        std::ostringstream message;
-        message << "triangle count differs: candidate=" << candidate.size()
-                << " reference=" << reference.size();
-        error = message.str();
+    const std::vector<std::uint32_t> hull = convex_hull_indices(points);
+    if (hull.size() < 3) {
+        error = "mesh input has no two-dimensional convex hull";
         return false;
     }
-    if (!validate_mesh(points, reference, error)) {
-        error = "Delaunator reference failed validation: " + error;
+
+    std::unordered_set<std::uint64_t> expected_boundary;
+    expected_boundary.reserve(hull.size() * 2);
+    for (std::size_t i = 0; i < hull.size(); ++i) {
+        expected_boundary.insert(
+            edge_key(hull[i], hull[(i + 1) % hull.size()]));
+    }
+
+    std::unordered_set<std::uint64_t> actual_boundary;
+    actual_boundary.reserve(expected_boundary.size() * 2);
+    for (const auto& [key, edge] : edges) {
+        if (edge.count == 1) {
+            actual_boundary.insert(key);
+        }
+    }
+    if (actual_boundary.size() != expected_boundary.size() ||
+        std::any_of(
+            expected_boundary.begin(),
+            expected_boundary.end(),
+            [&](std::uint64_t key) {
+                return actual_boundary.find(key) == actual_boundary.end();
+            })) {
+        error = "mesh boundary does not match the input convex hull";
         return false;
     }
-    return validate_mesh(points, candidate, error);
+
+    Exact hull_twice_area = 0;
+    for (std::size_t i = 1; i + 1 < hull.size(); ++i) {
+        hull_twice_area += orient(
+            points[hull.front()],
+            points[hull[i]],
+            points[hull[i + 1]]);
+    }
+    if (mesh_twice_area != hull_twice_area) {
+        error = "mesh area does not match the input convex hull";
+        return false;
+    }
+    return true;
 }
 
 }  // namespace delaunay32::benchmark_support

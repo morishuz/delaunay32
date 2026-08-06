@@ -17,8 +17,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -30,7 +28,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Benchmark smoke test
-        run: ./build/delaunay_benchmark --quick --sizes 1000,10000
+        run: ./build/delaunay_benchmark --quick --sizes 1000,50000
 
       - name: Install
         run: cmake --install build --prefix staging
@@ -51,8 +49,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Configure
         run: cmake -S . -B build
@@ -83,15 +79,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Configure
         run: >-
           cmake -S . -B build-sanitize
           -DCMAKE_BUILD_TYPE=Debug
           -DDELAUNAY32_BUILD_BENCHMARKS=OFF
-          -DDELAUNAY32_BUILD_EXAMPLES=OFF
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
@@ -106,15 +99,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Configure
         run: >-
           cmake -S . -B build-thread-sanitize
           -DCMAKE_BUILD_TYPE=Debug
           -DDELAUNAY32_BUILD_BENCHMARKS=OFF
-          -DDELAUNAY32_BUILD_EXAMPLES=OFF
           -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
 
@@ -131,15 +121,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Configure
         run: >-
           cmake -S . -B build-int64
           -DCMAKE_BUILD_TYPE=Debug
           -DDELAUNAY32_BUILD_BENCHMARKS=OFF
-          -DDELAUNAY32_BUILD_EXAMPLES=OFF
           -DCMAKE_CXX_FLAGS="-U__SIZEOF_INT128__"
 
       - name: Build

@@ -3,7 +3,7 @@
 #pragma once
 
 #include "delaunay32/delaunay.hpp"
-#include "delaunay32/extras/geometry.hpp"
+#include "delaunay32/quantization.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,56 +11,58 @@
 
 namespace delaunay32::extras {
 
-struct IntBounds {
-    std::int32_t min_x = 0;
-    std::int32_t max_x = 999;
-    std::int32_t min_y = 0;
-    std::int32_t max_y = 999;
+struct SamplingBounds {
+    double min_x = 0.0;
+    double max_x = 1.0;
+    double min_y = 0.0;
+    double max_y = 1.0;
 };
 
-struct FloatBounds {
-    float min_x = 0.0F;
-    float max_x = 1.0F;
-    float min_y = 0.0F;
-    float max_y = 1.0F;
-};
-
-struct UniformIntOptions {
+struct UniformSamplingOptions {
     std::size_t point_count = 1000;
-    IntBounds bounds;
     std::uint64_t seed = 1;
-    bool include_corners = true;
+    bool include_bounds_corners = false;
+    std::size_t attempts_per_point = 10000;
 };
 
-struct UniformFloatOptions {
-    std::size_t point_count = 1000;
-    FloatBounds bounds;
-    std::uint64_t seed = 1;
-    bool include_corners = true;
-};
-
-// Generates unique integer points. point_count includes any requested corners.
-std::vector<Point> generate_uniform_int_points(
-    const UniformIntOptions& options = {});
-
-// Generates floating-point samples. point_count includes requested corners.
-std::vector<FloatPoint> generate_uniform_float_points(
-    const UniformFloatOptions& options = {});
-
-struct BestCandidateOptions {
+struct BlueNoiseSamplingOptions {
     std::size_t point_count = 1000;
     std::size_t candidates_per_point = 16;
     std::size_t attempts_per_candidate = 10000;
     std::uint64_t seed = 1;
 };
 
-// Returns new unique points strictly inside the supplied polygon domains.
-// Candidates maximize their distance from domain boundaries and earlier
-// samples in the same domain, producing blue-noise-style spacing. The returned
-// vector contains only generated samples; callers can append it to `points`.
-std::vector<Point> sample_polygon_interiors(
-    const std::vector<Point>& points,
-    const std::vector<PolygonDomain>& domains,
-    const BestCandidateOptions& options = {});
+// Stateful floating-point sampler for either rectangular bounds or indexed
+// polygon interiors. Setting one region replaces the previous region.
+class PointSampler {
+public:
+    void set_bounds(SamplingBounds bounds);
+
+    // The sampler owns its configured polygon data. Integer coordinates are
+    // exactly representable by FloatPoint and are converted internally.
+    void set_polygon_interiors(
+        std::vector<Point> points,
+        std::vector<PolygonDomain> domains);
+    void set_polygon_interiors(
+        std::vector<FloatPoint> points,
+        std::vector<PolygonDomain> domains);
+
+    std::vector<FloatPoint> generate_uniform(
+        const UniformSamplingOptions& options = {}) const;
+    std::vector<FloatPoint> generate_blue_noise(
+        const BlueNoiseSamplingOptions& options = {}) const;
+
+private:
+    enum class Region {
+        None,
+        Bounds,
+        PolygonInteriors,
+    };
+
+    Region region_ = Region::None;
+    SamplingBounds bounds_;
+    std::vector<FloatPoint> polygon_points_;
+    std::vector<PolygonDomain> domains_;
+};
 
 }  // namespace delaunay32::extras

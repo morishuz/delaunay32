@@ -20,17 +20,8 @@ struct Point {
     std::int32_t y = 0;
 };
 
-// A floating-point site for the convenience quantization API. Output triangle
-// indices always refer back to the original, unmodified input.
-struct FloatPoint {
-    float x = 0.0F;
-    float y = 0.0F;
-};
-
 // Indices into the caller's original point array, counterclockwise in the
-// coordinates used for triangulation. For float input, that means the internal
-// quantized coordinates; near-degenerate source geometry may have a different
-// winding after the original coordinates are restored.
+// integer coordinates used for triangulation.
 struct Triangle {
     std::uint32_t i0 = 0;
     std::uint32_t i1 = 0;
@@ -44,56 +35,44 @@ struct Constraint {
     std::uint32_t i1 = 0;
 };
 
+// Rings contain indices into the configured point array. Their closing edge
+// is implicit; a repeated first index at the end is optional.
+struct PolygonDomain {
+    std::vector<std::uint32_t> outer_ring;
+    std::vector<std::vector<std::uint32_t>> holes;
+};
+
 enum class PredicateWidth {
     Int64,
     Int128,
     Unsupported,
 };
 
-enum class QuantizationMode {
-    // Use the finest uniform grid supported by the active predicate backend.
-    Automatic,
-    // Use QuantizationOptions::grid_step and the input minima as the origin.
-    GridStep,
-    // Use QuantizationOptions::origin_x, origin_y, and scale verbatim.
-    FixedScale,
+enum class ResultDetail {
+    Triangles,
+    Full,
 };
 
-enum class QuantizationCollisionPolicy {
-    Allow,
-    Reject,
+struct TriangulationOptions {
+    // One preserves the serial path. Zero selects the hardware thread count
+    // and still falls back to serial for small inputs.
+    std::size_t thread_count = 1;
+    ResultDetail result_detail = ResultDetail::Triangles;
 };
 
-// Configuration for float input. A positive
-// max_coordinate_error is an additional acceptance limit in every mode.
-struct QuantizationOptions {
-    QuantizationMode mode = QuantizationMode::Automatic;
-    double grid_step = 0.0;
-    double origin_x = 0.0;
-    double origin_y = 0.0;
-    double scale = 0.0;
-    double max_coordinate_error = 0.0;
-    QuantizationCollisionPolicy collision_policy =
-        QuantizationCollisionPolicy::Allow;
-};
-
-// Describes the uniform source-to-integer mapping used by floating-point
-// triangulation. Quantized coordinates are round((value - origin) * scale).
-struct QuantizationReport {
-    double origin_x = 0.0;
-    double origin_y = 0.0;
-    double scale = 0.0;
-    double grid_step = 0.0;
-    double max_coordinate_error = 0.0;
+struct TriangulationReport {
+    PredicateWidth predicate_width = PredicateWidth::Unsupported;
+    std::size_t actual_thread_count = 1;
+    std::size_t input_points = 0;
     std::size_t unique_points = 0;
     std::size_t collapsed_points = 0;
 };
 
 struct TriangulationResult {
-    // The same triangle vector returned by the corresponding triangle-only
-    // API. For each flattened edge e = 3 * triangle + local_edge,
+    // For each flattened edge e = 3 * triangle + local_edge,
     // halfedges[e] is the oppositely directed neighboring edge, or -1 on the
-    // convex hull. Local edges are i0->i1, i1->i2, and i2->i0.
+    // convex hull or a clipped domain boundary. Local edges are i0->i1,
+    // i1->i2, and i2->i0.
     std::vector<Triangle> triangles;
     std::vector<std::int64_t> halfedges;
 
@@ -103,18 +82,16 @@ struct TriangulationResult {
     std::vector<std::uint32_t> hull;
 
     // One entry per input point. Coincident inputs map to the lowest original
-    // index retained at that integer or quantized coordinate.
+    // index retained at that coordinate.
     std::vector<std::uint32_t> representatives;
 
-    // Populated for float input and zero-initialized for integer input.
-    QuantizationReport quantization;
-    PredicateWidth predicate_width = PredicateWidth::Unsupported;
-    std::size_t actual_thread_count = 1;
+    TriangulationReport report;
 };
 
 // Integer divide-and-conquer triangulator using a compact two-dart primal
-// edge ring. Reuse an instance across calls, but do not call the same instance
-// concurrently.
+// edge ring. Each configured problem is consumed by triangulate(), including
+// failed runs. Call set_points() to begin another problem. Allocations and
+// worker threads are retained across problems. An instance is not concurrent.
 class Triangulator {
 public:
     // Largest equal x/y spans certified by the conservative runtime bounds.
@@ -133,56 +110,24 @@ public:
         std::uint64_t x_span,
         std::uint64_t y_span) noexcept;
 
-    // thread_count == 1 preserves the original serial path. Zero selects the
-    // hardware thread count and still falls back to serial for small inputs.
     // Special members are out-of-line: WorkerTeam is incomplete in this header.
-    explicit Triangulator(std::size_t thread_count = 1);
+    Triangulator();
     ~Triangulator();
     Triangulator(const Triangulator&) = delete;
     Triangulator& operator=(const Triangulator&) = delete;
     Triangulator(Triangulator&&) noexcept;
     Triangulator& operator=(Triangulator&&) noexcept;
 
-    void set_thread_count(std::size_t thread_count) {
-        thread_count_ = thread_count;
-    }
-    std::size_t thread_count() const { return thread_count_; }
+    void set_options(TriangulationOptions options);
+
+    // Starts a new problem and clears its previous geometry and run state.
+    void set_points(const std::vector<Point>& points);
+    void set_constraints(std::vector<Constraint> constraints);
+    void set_polygons(std::vector<PolygonDomain> polygons);
 
     // Coincident sites are collapsed deterministically. Triangles reference
     // the lowest original input index for each retained site.
-    std::vector<Triangle> triangulate_int(
-        const std::vector<Point>& points);
-
-    // Constructs a constrained Delaunay triangulation of the convex hull.
-    // Constraint endpoints index the original point array. Properly crossing
-    // constraints are rejected; constraints may meet at existing sites.
-    std::vector<Triangle> triangulate_constrained_int(
-        const std::vector<Point>& points,
-        const std::vector<Constraint>& constraints);
-
-    // Constructs a constrained Delaunay triangulation of a polygonal domain.
-    // Rings contain indices into points; their closing edge is implicit and a
-    // repeated first index at the end is optional. Ring winding is normalized
-    // internally. Rings must be simple, mutually disjoint, and non-touching;
-    // holes must lie strictly inside the outer ring.
-    std::vector<Triangle> triangulate_polygon_int(
-        const std::vector<Point>& points,
-        const std::vector<std::uint32_t>& outer_ring,
-        const std::vector<std::vector<std::uint32_t>>& holes = {});
-
-    // Uniformly quantizes finite floating-point coordinates. The returned
-    // indices still reference the original input; only topology decisions use
-    // the quantized coordinates.
-    std::vector<Triangle> triangulate_float(
-        const std::vector<FloatPoint>& points,
-        const QuantizationOptions& options = {});
-    // Opt-in complete results. Existing triangle-only overloads do not
-    // construct adjacency, hull, or representative vectors.
-    TriangulationResult triangulate_int_full(
-        const std::vector<Point>& points);
-    TriangulationResult triangulate_float_full(
-        const std::vector<FloatPoint>& points,
-        const QuantizationOptions& options = {});
+    TriangulationResult triangulate();
 
 private:
     static constexpr std::size_t kMortonLeafSize = 16;
@@ -278,6 +223,8 @@ private:
     std::vector<Triangle> triangles_out_;
     std::vector<std::int64_t> halfedges_out_;
     std::vector<std::uint32_t> hull_out_;
+    std::vector<Constraint> constraints_;
+    std::vector<PolygonDomain> polygons_;
     std::vector<std::vector<Triangle>> export_scratch_;
     // Retained across calls so multi-shot clients do not rebuild OS threads.
     std::unique_ptr<detail::WorkerTeam> worker_team_;
@@ -285,6 +232,7 @@ private:
     std::size_t edge_count_ = 0;
     std::size_t thread_count_ = 1;
     std::size_t active_thread_count_ = 1;
+    std::size_t input_point_count_ = 0;
     std::size_t edge_capacity_limit_ = 0;
     std::uint32_t outer_seed_ = 0;
     std::int32_t min_x_ = 0;
@@ -292,19 +240,16 @@ private:
     std::int32_t max_x_ = 0;
     std::int32_t max_y_ = 0;
     bool int64_wide_intermediates_ = false;
+    bool problem_ready_ = false;
+    ResultDetail result_detail_ = ResultDetail::Triangles;
 
     static void require_point_count(std::size_t point_count);
+    void require_ready_problem() const;
     detail::WorkerTeam* ensure_worker_team(std::size_t thread_count);
     void load_int_points(const std::vector<Point>& points);
-    void load_float_points(
-        const std::vector<FloatPoint>& points,
-        const QuantizationOptions& options,
-        QuantizationReport* report);
     PredicateWidth build_loaded_topology(
-        std::vector<std::uint32_t>* representatives = nullptr,
-        bool reject_duplicates = false);
+        std::vector<std::uint32_t>* representatives = nullptr);
     TriangulationResult make_result(
-        const QuantizationReport& quantization,
         PredicateWidth predicate_width,
         std::vector<std::uint32_t>&& representatives);
     void sort_points_morton(
@@ -420,12 +365,15 @@ private:
     std::vector<std::vector<std::uint32_t>> prepare_polygon_rings(
         const std::vector<std::uint32_t>& outer_ring,
         const std::vector<std::vector<std::uint32_t>>& holes) const;
+    std::vector<std::vector<std::vector<std::uint32_t>>>
+    prepare_polygon_domains() const;
     std::uint32_t first_boundary_edge(
         std::uint32_t origin,
         std::uint32_t destination) const;
     void mark_polygon_excluded_faces(
-        const std::vector<std::vector<std::uint32_t>>& rings);
-    std::vector<Triangle> finish_triangle_export();
+        const std::vector<
+            std::vector<std::vector<std::uint32_t>>>& domains);
+    void finish_triangle_export();
     void finish_full_export();
     void export_triangles();
     void export_triangles_parallel(

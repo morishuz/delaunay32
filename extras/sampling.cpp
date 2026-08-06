@@ -11,60 +11,69 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace delaunay32::extras {
 namespace {
 
-std::uint64_t point_key(const Point& point) {
-    return (static_cast<std::uint64_t>(
-                static_cast<std::uint32_t>(point.x))
-            << 32U) |
-           static_cast<std::uint32_t>(point.y);
-}
-
-void validate(const IntBounds& bounds) {
-    if (bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y) {
-        throw std::invalid_argument(
-            "integer sampling bounds must be ordered");
-    }
-}
-
-void validate(const FloatBounds& bounds) {
+void validate_bounds(const SamplingBounds& bounds) {
     if (!std::isfinite(bounds.min_x) ||
         !std::isfinite(bounds.max_x) ||
         !std::isfinite(bounds.min_y) ||
         !std::isfinite(bounds.max_y) ||
         bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y) {
         throw std::invalid_argument(
-            "float sampling bounds must be finite and ordered");
+            "sampling bounds must be finite and ordered");
     }
 }
 
-std::vector<Point> integer_corners(const IntBounds& bounds) {
-    const Point candidates[] = {
-        {bounds.min_x, bounds.min_y},
-        {bounds.max_x, bounds.min_y},
-        {bounds.max_x, bounds.max_y},
-        {bounds.min_x, bounds.max_y},
-    };
-    std::vector<Point> corners;
-    for (const Point& candidate : candidates) {
-        if (std::none_of(
-                corners.begin(),
-                corners.end(),
-                [&](const Point& point) {
-                    return point.x == candidate.x &&
-                           point.y == candidate.y;
-                })) {
-            corners.push_back(candidate);
+void validate_polygon_region(
+    const std::vector<FloatPoint>& points,
+    const std::vector<PolygonDomain>& domains) {
+    if (points.empty() || domains.empty()) {
+        throw std::invalid_argument(
+            "polygon sampling requires points and at least one domain");
+    }
+    for (const FloatPoint& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+            throw std::invalid_argument(
+                "polygon sampling coordinates must be finite");
         }
     }
-    return corners;
+    for (std::size_t i = 0; i < domains.size(); ++i) {
+        detail::validate_domain(
+            domains[i], points.size(), "domain " + std::to_string(i));
+    }
 }
 
-std::vector<FloatPoint> float_corners(const FloatBounds& bounds) {
+SamplingBounds polygon_bounds(
+    const std::vector<FloatPoint>& points,
+    const std::vector<PolygonDomain>& domains) {
+    SamplingBounds bounds{
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+    const auto inspect_ring = [&](const std::vector<std::uint32_t>& ring) {
+        for (const std::uint32_t index : ring) {
+            bounds.min_x = std::min(bounds.min_x, points[index].x);
+            bounds.max_x = std::max(bounds.max_x, points[index].x);
+            bounds.min_y = std::min(bounds.min_y, points[index].y);
+            bounds.max_y = std::max(bounds.max_y, points[index].y);
+        }
+    };
+    for (const PolygonDomain& domain : domains) {
+        inspect_ring(domain.outer_ring);
+        for (const std::vector<std::uint32_t>& hole : domain.holes) {
+            inspect_ring(hole);
+        }
+    }
+    return bounds;
+}
+
+std::vector<FloatPoint> distinct_corners(const SamplingBounds& bounds) {
     const FloatPoint candidates[] = {
         {bounds.min_x, bounds.min_y},
         {bounds.max_x, bounds.min_y},
@@ -86,104 +95,56 @@ std::vector<FloatPoint> float_corners(const FloatBounds& bounds) {
     return corners;
 }
 
-bool grid_can_hold(
-    std::uint64_t width,
-    std::uint64_t height,
-    std::size_t point_count) {
-    const std::uint64_t count = static_cast<std::uint64_t>(point_count);
-    const std::uint64_t rows =
-        count / width + (count % width == 0U ? 0U : 1U);
-    return rows <= height;
-}
+struct PolygonCandidate {
+    FloatPoint point;
+    std::size_t domain = 0;
+};
 
-std::uint64_t point_offset(
-    const Point& point,
-    const IntBounds& bounds,
-    std::uint64_t width) {
-    const std::uint64_t x = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(point.x) - bounds.min_x);
-    const std::uint64_t y = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(point.y) - bounds.min_y);
-    return y * width + x;
-}
-
-Point point_from_offset(
-    std::uint64_t offset,
-    const IntBounds& bounds,
-    std::uint64_t width) {
-    const std::uint64_t x = offset % width;
-    const std::uint64_t y = offset / width;
-    return {
-        static_cast<std::int32_t>(
-            static_cast<std::int64_t>(bounds.min_x) +
-            static_cast<std::int64_t>(x)),
-        static_cast<std::int32_t>(
-            static_cast<std::int64_t>(bounds.min_y) +
-            static_cast<std::int64_t>(y)),
-    };
-}
-
-std::vector<Point> sample_integer_grid_without_replacement(
-    const UniformIntOptions& options,
-    const std::vector<Point>& corners,
-    std::uint64_t width,
-    std::uint64_t capacity) {
-    std::vector<std::uint64_t> corner_offsets;
-    corner_offsets.reserve(corners.size());
-    for (const Point& corner : corners) {
-        corner_offsets.push_back(
-            point_offset(corner, options.bounds, width));
-    }
-    std::sort(corner_offsets.begin(), corner_offsets.end());
-
-    const std::size_t random_count = options.point_count - corners.size();
-    const std::uint64_t available =
-        capacity - static_cast<std::uint64_t>(corners.size());
-    std::mt19937_64 random(options.seed);
-    std::unordered_set<std::uint64_t> selected;
-    selected.reserve(random_count);
-
-    // Floyd's algorithm draws a uniform subset in O(point_count) time even
-    // when the requested sample occupies most of a small integer grid.
-    const std::uint64_t start =
-        available - static_cast<std::uint64_t>(random_count);
-    for (std::size_t i = 0; i < random_count; ++i) {
-        const std::uint64_t upper = start + static_cast<std::uint64_t>(i);
-        std::uniform_int_distribution<std::uint64_t> offset(0, upper);
-        const std::uint64_t candidate = offset(random);
-        if (!selected.insert(candidate).second) {
-            selected.insert(upper);
-        }
-    }
-
-    std::vector<Point> points = corners;
-    points.reserve(options.point_count);
-    for (const std::uint64_t compressed_offset : selected) {
-        std::uint64_t offset = compressed_offset;
-        for (const std::uint64_t corner_offset : corner_offsets) {
-            if (offset < corner_offset) {
-                break;
+PolygonCandidate polygon_candidate(
+    std::mt19937_64& random,
+    const SamplingBounds& bounds,
+    const std::vector<FloatPoint>& points,
+    const std::vector<PolygonDomain>& domains,
+    std::size_t attempts) {
+    std::uniform_real_distribution<double> x_coordinate(
+        bounds.min_x, bounds.max_x);
+    std::uniform_real_distribution<double> y_coordinate(
+        bounds.min_y, bounds.max_y);
+    for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
+        const FloatPoint candidate = {
+            x_coordinate(random),
+            y_coordinate(random),
+        };
+        for (std::size_t domain = 0; domain < domains.size(); ++domain) {
+            if (detail::point_is_strictly_inside_domain_unchecked(
+                    candidate, domains[domain], points)) {
+                return {candidate, domain};
             }
-            ++offset;
         }
-        points.push_back(point_from_offset(offset, options.bounds, width));
     }
-    return points;
+    throw std::runtime_error(
+        "could not sample a point inside the configured polygon domains");
+}
+
+long double squared_distance(
+    const FloatPoint& first,
+    const FloatPoint& second) {
+    const long double dx =
+        static_cast<long double>(first.x) - second.x;
+    const long double dy =
+        static_cast<long double>(first.y) - second.y;
+    return dx * dx + dy * dy;
 }
 
 long double squared_distance_to_segment(
-    const Point& point,
-    const Point& a,
-    const Point& b) {
+    const FloatPoint& point,
+    const FloatPoint& a,
+    const FloatPoint& b) {
     const long double dx = static_cast<long double>(b.x) - a.x;
     const long double dy = static_cast<long double>(b.y) - a.y;
     const long double length_squared = dx * dx + dy * dy;
     if (length_squared == 0.0L) {
-        const long double point_dx =
-            static_cast<long double>(point.x) - a.x;
-        const long double point_dy =
-            static_cast<long double>(point.y) - a.y;
-        return point_dx * point_dx + point_dy * point_dy;
+        return squared_distance(point, a);
     }
     const long double projection = std::clamp(
         ((static_cast<long double>(point.x) - a.x) * dx +
@@ -198,10 +159,10 @@ long double squared_distance_to_segment(
     return point_dx * point_dx + point_dy * point_dy;
 }
 
-long double minimum_boundary_distance_squared(
-    const Point& point,
+long double polygon_boundary_distance_squared(
+    const FloatPoint& point,
     const PolygonDomain& domain,
-    const std::vector<Point>& points) {
+    const std::vector<FloatPoint>& points) {
     long double minimum = std::numeric_limits<long double>::max();
     const auto inspect_ring = [&](const std::vector<std::uint32_t>& ring) {
         for (std::size_t i = 0; i < ring.size(); ++i) {
@@ -220,216 +181,168 @@ long double minimum_boundary_distance_squared(
     return minimum;
 }
 
-struct Candidate {
-    Point point;
-    std::size_t domain = 0;
-};
+long double bounds_boundary_distance_squared(
+    const FloatPoint& point,
+    const SamplingBounds& bounds) {
+    const long double distance = std::min({
+        static_cast<long double>(point.x - bounds.min_x),
+        static_cast<long double>(bounds.max_x - point.x),
+        static_cast<long double>(point.y - bounds.min_y),
+        static_cast<long double>(bounds.max_y - point.y),
+    });
+    return distance * distance;
+}
+
+void include_sample_distances(
+    long double& minimum_distance_squared,
+    const FloatPoint& candidate,
+    const std::vector<FloatPoint>& accepted) {
+    for (const FloatPoint& point : accepted) {
+        minimum_distance_squared = std::min(
+            minimum_distance_squared,
+            squared_distance(candidate, point));
+    }
+}
 
 }  // namespace
 
-std::vector<Point> generate_uniform_int_points(
-    const UniformIntOptions& options) {
-    validate(options.bounds);
-    const std::uint64_t width =
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(options.bounds.max_x) -
-            options.bounds.min_x) +
-        1U;
-    const std::uint64_t height =
-        static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(options.bounds.max_y) -
-            options.bounds.min_y) +
-        1U;
-    if (!grid_can_hold(width, height, options.point_count)) {
-        throw std::invalid_argument(
-            "point_count exceeds the number of integer coordinates in bounds");
-    }
+void PointSampler::set_bounds(SamplingBounds bounds) {
+    validate_bounds(bounds);
+    bounds_ = bounds;
+    polygon_points_.clear();
+    domains_.clear();
+    region_ = Region::Bounds;
+}
 
-    std::vector<Point> corners;
-    if (options.include_corners) {
-        corners = integer_corners(options.bounds);
-        if (options.point_count < corners.size()) {
-            throw std::invalid_argument(
-                "point_count is smaller than the number of distinct corners");
-        }
-    }
-
-    if (width <= std::numeric_limits<std::uint64_t>::max() / height) {
-        return sample_integer_grid_without_replacement(
-            options, corners, width, width * height);
-    }
-
-    // The only signed-32-bit rectangle whose cell count does not fit uint64_t
-    // is the complete 2^32 by 2^32 grid. Any representable vector is sparse
-    // in that domain, so ordinary rejection sampling remains efficient.
-    std::vector<Point> points = corners;
-    points.reserve(options.point_count);
-
-    std::unordered_set<std::uint64_t> occupied;
-    occupied.reserve(options.point_count);
+void PointSampler::set_polygon_interiors(
+    std::vector<Point> points,
+    std::vector<PolygonDomain> domains) {
+    std::vector<FloatPoint> converted;
+    converted.reserve(points.size());
     for (const Point& point : points) {
-        occupied.insert(point_key(point));
+        converted.push_back({
+            static_cast<double>(point.x),
+            static_cast<double>(point.y),
+        });
     }
-
-    std::mt19937_64 random(options.seed);
-    std::uniform_int_distribution<std::int32_t> x_coordinate(
-        options.bounds.min_x, options.bounds.max_x);
-    std::uniform_int_distribution<std::int32_t> y_coordinate(
-        options.bounds.min_y, options.bounds.max_y);
-    while (points.size() < options.point_count) {
-        const Point point = {x_coordinate(random), y_coordinate(random)};
-        if (occupied.insert(point_key(point)).second) {
-            points.push_back(point);
-        }
-    }
-    return points;
+    set_polygon_interiors(std::move(converted), std::move(domains));
 }
 
-std::vector<FloatPoint> generate_uniform_float_points(
-    const UniformFloatOptions& options) {
-    validate(options.bounds);
-    std::vector<FloatPoint> points;
-    if (options.include_corners) {
-        points = float_corners(options.bounds);
-        if (options.point_count < points.size()) {
-            throw std::invalid_argument(
-                "point_count is smaller than the number of distinct corners");
-        }
-    }
-    points.reserve(options.point_count);
-
-    std::mt19937_64 random(options.seed);
-    std::uniform_real_distribution<float> x_coordinate(
-        options.bounds.min_x, options.bounds.max_x);
-    std::uniform_real_distribution<float> y_coordinate(
-        options.bounds.min_y, options.bounds.max_y);
-    while (points.size() < options.point_count) {
-        points.push_back({x_coordinate(random), y_coordinate(random)});
-    }
-    return points;
+void PointSampler::set_polygon_interiors(
+    std::vector<FloatPoint> points,
+    std::vector<PolygonDomain> domains) {
+    validate_polygon_region(points, domains);
+    bounds_ = polygon_bounds(points, domains);
+    polygon_points_ = std::move(points);
+    domains_ = std::move(domains);
+    region_ = Region::PolygonInteriors;
 }
 
-std::vector<Point> sample_polygon_interiors(
-    const std::vector<Point>& points,
-    const std::vector<PolygonDomain>& domains,
-    const BestCandidateOptions& options) {
-    if (options.point_count == 0) {
-        return {};
+std::vector<FloatPoint> PointSampler::generate_uniform(
+    const UniformSamplingOptions& options) const {
+    if (region_ == Region::None) {
+        throw std::logic_error(
+            "point sampler requires configured bounds or polygon interiors");
     }
-    if (points.empty() || domains.empty()) {
+    if (options.attempts_per_point == 0) {
         throw std::invalid_argument(
-            "polygon sampling requires points and at least one domain");
+            "uniform sampling attempts_per_point must be positive");
+    }
+    if (region_ == Region::PolygonInteriors &&
+        options.include_bounds_corners) {
+        throw std::invalid_argument(
+            "include_bounds_corners is only valid for bounds sampling");
+    }
+
+    std::vector<FloatPoint> generated;
+    if (region_ == Region::Bounds && options.include_bounds_corners) {
+        generated = distinct_corners(bounds_);
+        if (options.point_count < generated.size()) {
+            throw std::invalid_argument(
+                "point_count is smaller than the number of distinct bounds "
+                "corners");
+        }
+    }
+    generated.reserve(options.point_count);
+
+    std::mt19937_64 random(options.seed);
+    if (region_ == Region::Bounds) {
+        std::uniform_real_distribution<double> x_coordinate(
+            bounds_.min_x, bounds_.max_x);
+        std::uniform_real_distribution<double> y_coordinate(
+            bounds_.min_y, bounds_.max_y);
+        while (generated.size() < options.point_count) {
+            generated.push_back({x_coordinate(random), y_coordinate(random)});
+        }
+        return generated;
+    }
+
+    while (generated.size() < options.point_count) {
+        generated.push_back(
+            polygon_candidate(
+                random,
+                bounds_,
+                polygon_points_,
+                domains_,
+                options.attempts_per_point)
+                .point);
+    }
+    return generated;
+}
+
+std::vector<FloatPoint> PointSampler::generate_blue_noise(
+    const BlueNoiseSamplingOptions& options) const {
+    if (region_ == Region::None) {
+        throw std::logic_error(
+            "point sampler requires configured bounds or polygon interiors");
     }
     if (options.candidates_per_point == 0 ||
         options.attempts_per_candidate == 0) {
         throw std::invalid_argument(
-            "candidate and attempt counts must be positive");
-    }
-    for (std::size_t i = 0; i < domains.size(); ++i) {
-        detail::validate_domain(
-            domains[i], points.size(), "domain " + std::to_string(i));
-    }
-
-    std::int32_t minimum_x = std::numeric_limits<std::int32_t>::max();
-    std::int32_t minimum_y = std::numeric_limits<std::int32_t>::max();
-    std::int32_t maximum_x = std::numeric_limits<std::int32_t>::min();
-    std::int32_t maximum_y = std::numeric_limits<std::int32_t>::min();
-    const auto inspect_ring = [&](const std::vector<std::uint32_t>& ring) {
-        for (const std::uint32_t index : ring) {
-            minimum_x = std::min(minimum_x, points[index].x);
-            minimum_y = std::min(minimum_y, points[index].y);
-            maximum_x = std::max(maximum_x, points[index].x);
-            maximum_y = std::max(maximum_y, points[index].y);
-        }
-    };
-    for (const PolygonDomain& domain : domains) {
-        inspect_ring(domain.outer_ring);
-        for (const std::vector<std::uint32_t>& hole : domain.holes) {
-            inspect_ring(hole);
-        }
-    }
-
-    std::unordered_set<std::uint64_t> occupied;
-    if (options.point_count >
-        std::numeric_limits<std::size_t>::max() - points.size()) {
-        throw std::invalid_argument("requested sample count is too large");
-    }
-    occupied.reserve(points.size() + options.point_count);
-    for (const Point& point : points) {
-        occupied.insert(point_key(point));
+            "blue-noise candidate and attempt counts must be positive");
     }
 
     std::mt19937_64 random(options.seed);
-    std::uniform_int_distribution<std::int32_t> x_coordinate(
-        minimum_x, maximum_x);
-    std::uniform_int_distribution<std::int32_t> y_coordinate(
-        minimum_y, maximum_y);
-
-    std::vector<Point> generated;
+    std::uniform_real_distribution<double> x_coordinate(
+        bounds_.min_x, bounds_.max_x);
+    std::uniform_real_distribution<double> y_coordinate(
+        bounds_.min_y, bounds_.max_y);
+    std::vector<FloatPoint> generated;
     generated.reserve(options.point_count);
-    std::vector<std::vector<Point>> accepted_by_domain(domains.size());
     while (generated.size() < options.point_count) {
-        Candidate best;
+        FloatPoint best;
         long double best_distance_squared = -1.0L;
         for (std::size_t sample = 0;
              sample < options.candidates_per_point;
              ++sample) {
-            Candidate candidate;
-            bool found = false;
-            for (std::size_t attempt = 0;
-                 attempt < options.attempts_per_candidate;
-                 ++attempt) {
-                candidate.point = {
-                    x_coordinate(random),
-                    y_coordinate(random),
-                };
-                if (occupied.find(point_key(candidate.point)) !=
-                    occupied.end()) {
-                    continue;
-                }
-                for (std::size_t domain = 0;
-                     domain < domains.size();
-                     ++domain) {
-                    if (detail::point_is_strictly_inside_domain_unchecked(
-                            candidate.point, domains[domain], points)) {
-                        candidate.domain = domain;
-                        found = true;
-                        break;
-                    }
-                }
-                if (found) {
-                    break;
-                }
+            FloatPoint candidate;
+            long double minimum_distance_squared = 0.0L;
+            if (region_ == Region::Bounds) {
+                candidate = {x_coordinate(random), y_coordinate(random)};
+                minimum_distance_squared =
+                    bounds_boundary_distance_squared(candidate, bounds_);
+            } else {
+                const PolygonCandidate polygon = polygon_candidate(
+                    random,
+                    bounds_,
+                    polygon_points_,
+                    domains_,
+                    options.attempts_per_candidate);
+                candidate = polygon.point;
+                minimum_distance_squared =
+                    polygon_boundary_distance_squared(
+                        candidate,
+                        domains_[polygon.domain],
+                        polygon_points_);
             }
-            if (!found) {
-                throw std::runtime_error(
-                    "could not sample a unique point inside the domains");
-            }
-
-            long double minimum_distance_squared =
-                minimum_boundary_distance_squared(
-                    candidate.point,
-                    domains[candidate.domain],
-                    points);
-            for (const Point& accepted :
-                 accepted_by_domain[candidate.domain]) {
-                const long double dx =
-                    static_cast<long double>(candidate.point.x) - accepted.x;
-                const long double dy =
-                    static_cast<long double>(candidate.point.y) - accepted.y;
-                minimum_distance_squared = std::min(
-                    minimum_distance_squared,
-                    dx * dx + dy * dy);
-            }
+            include_sample_distances(
+                minimum_distance_squared, candidate, generated);
             if (minimum_distance_squared > best_distance_squared) {
                 best = candidate;
                 best_distance_squared = minimum_distance_squared;
             }
         }
-
-        occupied.insert(point_key(best.point));
-        accepted_by_domain[best.domain].push_back(best.point);
-        generated.push_back(best.point);
+        generated.push_back(best);
     }
     return generated;
 }

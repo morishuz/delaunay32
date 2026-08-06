@@ -4,7 +4,6 @@
 #include "internal.hpp"
 
 #include <algorithm>
-#include <utility>
 #include <vector>
 
 namespace delaunay32 {
@@ -147,14 +146,13 @@ void Triangulator::export_triangles_parallel(
     workers.run(worker_count, run);
 }
 
-std::vector<Triangle> Triangulator::finish_triangle_export() {
+void Triangulator::finish_triangle_export() {
     if (active_thread_count_ > 1) {
         export_triangles_parallel(
             active_thread_count_, *worker_team_);
     } else {
         export_triangles();
     }
-    return std::move(triangles_out_);
 }
 
 }  // namespace delaunay32

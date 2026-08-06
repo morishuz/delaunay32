@@ -3,6 +3,7 @@
 #include "support.hpp"
 
 #include "delaunay32/delaunay.hpp"
+#include "delaunay32/quantization.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,32 @@ void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void configure(
+    Triangulator& triangulator,
+    std::size_t thread_count,
+    ResultDetail detail = ResultDetail::Triangles) {
+    TriangulationOptions options;
+    options.thread_count = thread_count;
+    options.result_detail = detail;
+    triangulator.set_options(options);
+}
+
+std::vector<Triangle> triangulate_points(
+    Triangulator& triangulator,
+    const std::vector<Point>& points) {
+    triangulator.set_points(points);
+    return triangulator.triangulate().triangles;
+}
+
+TriangulationResult triangulate_full(
+    Triangulator& triangulator,
+    const std::vector<Point>& points,
+    std::size_t thread_count) {
+    configure(triangulator, thread_count, ResultDetail::Full);
+    triangulator.set_points(points);
+    return triangulator.triangulate();
 }
 
 template <typename Operation>
@@ -107,7 +134,8 @@ void test_seeded_serial_properties() {
         support::Dataset::Diagonal,
     };
 
-    Triangulator triangulator(1);
+    Triangulator triangulator;
+    configure(triangulator, 1);
     for (std::size_t dataset_index = 0;
          dataset_index < datasets.size();
          ++dataset_index) {
@@ -136,10 +164,10 @@ void test_seeded_serial_properties() {
                     " size " + std::to_string(sizes[size_index]) +
                     " seed " + std::to_string(seed_index);
                 const std::vector<Triangle> first =
-                    triangulator.triangulate_int(points);
+                    triangulate_points(triangulator, points);
                 require_valid_mesh(points, first, label);
                 const std::vector<Triangle> repeated =
-                    triangulator.triangulate_int(points);
+                    triangulate_points(triangulator, points);
                 require(
                     ordered_meshes_equal(first, repeated),
                     label + ": repeated serial output order changed");
@@ -158,16 +186,18 @@ void test_parallel_thresholds() {
         49999, 50000, 99999, 100000, 100001,
     };
 
-    Triangulator serial(1);
-    Triangulator parallel(2);
+    Triangulator serial;
+    configure(serial, 1);
+    Triangulator parallel;
+    configure(parallel, 2);
     for (const std::size_t size : sizes) {
         const std::vector<Point> points(
             master.begin(),
             master.begin() + static_cast<std::ptrdiff_t>(size));
         const std::vector<Triangle> expected =
-            serial.triangulate_int(points);
+            triangulate_points(serial, points);
         const std::vector<Triangle> candidate =
-            parallel.triangulate_int(points);
+            triangulate_points(parallel, points);
         const std::string label =
             "parallel threshold size " + std::to_string(size);
         require_same_mesh(expected, candidate, label);
@@ -176,7 +206,7 @@ void test_parallel_thresholds() {
         // so repeatability here applies to topology rather than vector order.
         require_same_mesh(
             candidate,
-            parallel.triangulate_int(points),
+            triangulate_points(parallel, points),
             label + " repeat");
     }
 }
@@ -187,15 +217,17 @@ void test_thread_counts_and_reconfiguration() {
         60000,
         0x7a12c0deULL,
         2000);
-    Triangulator serial(1);
-    const std::vector<Triangle> expected = serial.triangulate_int(points);
+    Triangulator serial;
+    configure(serial, 1);
+    const std::vector<Triangle> expected = triangulate_points(serial, points);
     require_valid_mesh(points, expected, "thread-count serial baseline");
 
     constexpr std::array<std::size_t, 5> thread_counts = {1, 2, 4, 8, 0};
     for (const std::size_t thread_count : thread_counts) {
-        Triangulator triangulator(thread_count);
+        Triangulator triangulator;
+        configure(triangulator, thread_count);
         const std::vector<Triangle> candidate =
-            triangulator.triangulate_int(points);
+            triangulate_points(triangulator, points);
         require_same_mesh(
             expected,
             candidate,
@@ -203,18 +235,17 @@ void test_thread_counts_and_reconfiguration() {
                 std::to_string(thread_count));
         require_same_mesh(
             candidate,
-            triangulator.triangulate_int(points),
+            triangulate_points(triangulator, points),
             "fresh requested thread count " +
                 std::to_string(thread_count) + " repeat");
     }
 
-    Triangulator reused(1);
+    Triangulator reused;
+    configure(reused, 1);
     for (const std::size_t thread_count : thread_counts) {
-        reused.set_thread_count(thread_count);
-        require(reused.thread_count() == thread_count,
-                "requested thread count was not retained");
+        configure(reused, thread_count);
         const std::vector<Triangle> candidate =
-            reused.triangulate_int(points);
+            triangulate_points(reused, points);
         require_same_mesh(
             expected,
             candidate,
@@ -222,7 +253,7 @@ void test_thread_counts_and_reconfiguration() {
                 std::to_string(thread_count));
         require_same_mesh(
             candidate,
-            reused.triangulate_int(points),
+            triangulate_points(reused, points),
             "reconfigured thread count " +
                 std::to_string(thread_count) + " repeat");
     }
@@ -236,12 +267,14 @@ void test_grid_and_duplicates() {
             grid.push_back({x, y});
         }
     }
-    Triangulator serial(1);
-    Triangulator parallel(4);
+    Triangulator serial;
+    configure(serial, 1);
+    Triangulator parallel;
+    configure(parallel, 4);
     const std::vector<Triangle> grid_expected =
-        serial.triangulate_int(grid);
+        triangulate_points(serial, grid);
     const std::vector<Triangle> grid_candidate =
-        parallel.triangulate_int(grid);
+        triangulate_points(parallel, grid);
     require_same_mesh(
         grid_expected,
         grid_candidate,
@@ -252,7 +285,7 @@ void test_grid_and_duplicates() {
         "highly skewed cocircular grid");
     require_same_mesh(
         grid_candidate,
-        parallel.triangulate_int(grid),
+        triangulate_points(parallel, grid),
         "highly skewed cocircular grid repeat");
 
     const std::vector<Point> unique = support::generate_points(
@@ -265,9 +298,9 @@ void test_grid_and_duplicates() {
     duplicated.insert(duplicated.end(), unique.begin(), unique.end());
 
     const std::vector<Triangle> unique_mesh =
-        serial.triangulate_int(unique);
+        triangulate_points(serial, unique);
     const std::vector<Triangle> duplicate_mesh =
-        parallel.triangulate_int(duplicated);
+        triangulate_points(parallel, duplicated);
     require_same_mesh(
         unique_mesh,
         duplicate_mesh,
@@ -278,7 +311,7 @@ void test_grid_and_duplicates() {
         "duplicate-heavy parallel compaction");
     require_same_mesh(
         duplicate_mesh,
-        parallel.triangulate_int(duplicated),
+        triangulate_points(parallel, duplicated),
         "duplicate-heavy parallel compaction repeat");
 }
 
@@ -302,8 +335,9 @@ void test_ring_and_nearly_collinear_inputs() {
             ring.push_back(point);
         }
     }
-    Triangulator serial(1);
-    const std::vector<Triangle> ring_mesh = serial.triangulate_int(ring);
+    Triangulator serial;
+    configure(serial, 1);
+    const std::vector<Triangle> ring_mesh = triangulate_points(serial, ring);
     require_valid_mesh(ring, ring_mesh, "ring-like input");
 
     std::vector<Point> nearly_collinear;
@@ -313,11 +347,12 @@ void test_ring_and_nearly_collinear_inputs() {
             nearly_collinear.push_back({x, x + band});
         }
     }
-    Triangulator parallel(4);
+    Triangulator parallel;
+    configure(parallel, 4);
     const std::vector<Triangle> expected =
-        serial.triangulate_int(nearly_collinear);
+        triangulate_points(serial, nearly_collinear);
     const std::vector<Triangle> candidate =
-        parallel.triangulate_int(nearly_collinear);
+        triangulate_points(parallel, nearly_collinear);
     require_same_mesh(
         expected,
         candidate,
@@ -328,7 +363,7 @@ void test_ring_and_nearly_collinear_inputs() {
         "nearly collinear parallel bands");
     require_same_mesh(
         candidate,
-        parallel.triangulate_int(nearly_collinear),
+        triangulate_points(parallel, nearly_collinear),
         "nearly collinear parallel bands repeat");
 }
 
@@ -338,38 +373,41 @@ void test_moves_and_exception_recovery() {
         60000,
         0xc0de5eedULL,
         1000);
-    Triangulator serial(1);
-    const std::vector<Triangle> expected = serial.triangulate_int(points);
+    Triangulator serial;
+    configure(serial, 1);
+    const std::vector<Triangle> expected = triangulate_points(serial, points);
 
-    Triangulator source(2);
+    Triangulator source;
+    configure(source, 2);
     require_same_mesh(
         expected,
-        source.triangulate_int(points),
+        triangulate_points(source, points),
         "pre-move triangulator");
     Triangulator moved(std::move(source));
     require_same_mesh(
         expected,
-        moved.triangulate_int(points),
+        triangulate_points(moved, points),
         "move-constructed triangulator");
 
-    Triangulator assigned(1);
+    Triangulator assigned;
+    configure(assigned, 1);
     assigned = std::move(moved);
     require_same_mesh(
         expected,
-        assigned.triangulate_int(points),
+        triangulate_points(assigned, points),
         "move-assigned triangulator");
 
     require_invalid(
-        [&] { assigned.triangulate_int({{0, 0}, {1, 1}}); },
+        [&] { triangulate_points(assigned, {{0, 0}, {1, 1}}); },
         "short integer input");
     require_same_mesh(
         expected,
-        assigned.triangulate_int(points),
+        triangulate_points(assigned, points),
         "reuse after short-input exception");
 
     require_invalid(
         [&] {
-            assigned.triangulate_float(std::vector<FloatPoint>{
+            quantize(std::vector<FloatPoint>{
                 {0.0F, 0.0F},
                 {1.0F, 0.0F},
                 {std::numeric_limits<float>::quiet_NaN(), 1.0F},
@@ -378,7 +416,7 @@ void test_moves_and_exception_recovery() {
         "NaN float input");
     require_same_mesh(
         expected,
-        assigned.triangulate_int(points),
+        triangulate_points(assigned, points),
         "reuse after float-input exception");
 }
 
@@ -388,8 +426,9 @@ void test_independent_concurrent_instances() {
         60000,
         0xc0ac077eULL,
         1000);
-    Triangulator serial(1);
-    const std::vector<Triangle> expected = serial.triangulate_int(points);
+    Triangulator serial;
+    configure(serial, 1);
+    const std::vector<Triangle> expected = triangulate_points(serial, points);
 
     constexpr std::array<std::size_t, 3> thread_counts = {1, 2, 4};
     std::array<std::vector<Triangle>, thread_counts.size()> outputs;
@@ -399,10 +438,12 @@ void test_independent_concurrent_instances() {
     for (std::size_t i = 0; i < thread_counts.size(); ++i) {
         callers.emplace_back([&, i] {
             try {
-                Triangulator triangulator(thread_counts[i]);
+                Triangulator triangulator;
+                configure(triangulator, thread_counts[i]);
                 if (i + 1 == thread_counts.size()) {
                     TriangulationResult result =
-                        triangulator.triangulate_int_full(points);
+                        triangulate_full(
+                            triangulator, points, thread_counts[i]);
                     require(
                         result.halfedges.size() ==
                                 result.triangles.size() * 3 &&
@@ -411,7 +452,7 @@ void test_independent_concurrent_instances() {
                         "concurrent full result omitted auxiliary data");
                     outputs[i] = std::move(result.triangles);
                 } else {
-                    outputs[i] = triangulator.triangulate_int(points);
+                    outputs[i] = triangulate_points(triangulator, points);
                 }
             } catch (...) {
                 exceptions[i] = std::current_exception();

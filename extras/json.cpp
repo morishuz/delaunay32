@@ -11,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -465,32 +466,7 @@ void write_domain(
     output << '\n' << indent << '}';
 }
 
-}  // namespace
-
-Geometry read_geometry_json(const std::string& input_path) {
-    std::ifstream input(input_path, std::ios::binary);
-    if (!input) {
-        throw std::runtime_error("could not open JSON: " + input_path);
-    }
-    const std::string text{
-        std::istreambuf_iterator<char>(input),
-        std::istreambuf_iterator<char>(),
-    };
-    if (input.bad()) {
-        throw std::runtime_error("failed while reading JSON: " + input_path);
-    }
-    return GeometryJsonParser(text, input_path).parse();
-}
-
-void write_geometry_json(
-    const std::string& output_path,
-    const Geometry& geometry) {
-    validate_geometry(geometry);
-    std::ofstream output(output_path, std::ios::binary);
-    if (!output) {
-        throw std::runtime_error("could not create JSON: " + output_path);
-    }
-
+void write_geometry(std::ostream& output, const Geometry& geometry) {
     output << "{\n  \"points\": [";
     for (std::size_t i = 0; i < geometry.points.size(); ++i) {
         const Point& point = geometry.points[i];
@@ -522,6 +498,42 @@ void write_geometry_json(
         output << "\n  ]";
     }
     output << "\n}\n";
+}
+
+}  // namespace
+
+Geometry read_geometry_json(const std::string& input_path) {
+    std::ifstream input(input_path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("could not open JSON: " + input_path);
+    }
+    const std::string text{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>(),
+    };
+    if (input.bad()) {
+        throw std::runtime_error("failed while reading JSON: " + input_path);
+    }
+    return GeometryJsonParser(text, input_path).parse();
+}
+
+std::string geometry_to_json(const Geometry& geometry) {
+    validate_geometry(geometry);
+    std::ostringstream output;
+    write_geometry(output, geometry);
+    return output.str();
+}
+
+void write_geometry_json(
+    const std::string& output_path,
+    const Geometry& geometry) {
+    validate_geometry(geometry);
+    std::ofstream output(output_path, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("could not create JSON: " + output_path);
+    }
+
+    write_geometry(output, geometry);
     if (!output) {
         throw std::runtime_error(
             "failed while writing JSON: " + output_path);
