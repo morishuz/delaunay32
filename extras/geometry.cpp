@@ -14,6 +14,8 @@
 namespace delaunay32::extras {
 namespace {
 
+using SamplingScalar = detail::SamplingScalar;
+
 struct SignedMagnitude {
     bool negative = false;
     std::uint64_t magnitude = 0;
@@ -101,22 +103,22 @@ RingLocation locate_in_ring(
     return inside ? RingLocation::inside : RingLocation::outside;
 }
 
-long double orient(
+SamplingScalar orient(
     const FloatPoint& a,
     const FloatPoint& b,
     const FloatPoint& point) {
     return
-        (static_cast<long double>(b.x) - a.x) *
-            (static_cast<long double>(point.y) - a.y) -
-        (static_cast<long double>(b.y) - a.y) *
-            (static_cast<long double>(point.x) - a.x);
+        (static_cast<SamplingScalar>(b.x) - a.x) *
+            (static_cast<SamplingScalar>(point.y) - a.y) -
+        (static_cast<SamplingScalar>(b.y) - a.y) *
+            (static_cast<SamplingScalar>(point.x) - a.x);
 }
 
 bool point_on_segment(
     const FloatPoint& point,
     const FloatPoint& a,
     const FloatPoint& b) {
-    if (orient(a, b, point) != 0.0L) {
+    if (orient(a, b, point) != 0.0) {
         return false;
     }
     return point.x >= std::min(a.x, b.x) &&
@@ -137,10 +139,10 @@ RingLocation locate_in_ring(
             return RingLocation::boundary;
         }
         if ((a.y > point.y) != (b.y > point.y)) {
-            const long double side = orient(a, b, point);
+            const SamplingScalar side = orient(a, b, point);
             const bool crosses_to_right =
-                (b.y > a.y && side > 0.0L) ||
-                (b.y < a.y && side < 0.0L);
+                (b.y > a.y && side > 0.0) ||
+                (b.y < a.y && side < 0.0);
             if (crosses_to_right) {
                 inside = !inside;
             }

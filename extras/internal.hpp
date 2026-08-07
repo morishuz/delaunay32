@@ -10,6 +10,10 @@
 
 namespace delaunay32::extras::detail {
 
+// Sampling inputs are already binary64. Keeping their geometry in binary64
+// also avoids software-emulated IEEE-128 arithmetic on WebAssembly targets.
+using SamplingScalar = double;
+
 void validate_domain(
     const PolygonDomain& domain,
     std::size_t point_count,

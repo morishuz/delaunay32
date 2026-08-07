@@ -19,6 +19,8 @@
 namespace delaunay32::extras {
 namespace {
 
+using SamplingScalar = detail::SamplingScalar;
+
 SamplingBounds empty_bounds() {
     return {
         std::numeric_limits<double>::infinity(),
@@ -235,44 +237,44 @@ RegionCandidate random_polygon_candidate(
         "could not sample a point inside the configured polygon domains");
 }
 
-long double squared_distance(
+SamplingScalar squared_distance(
     const FloatPoint& first,
     const FloatPoint& second) {
-    const long double dx =
-        static_cast<long double>(first.x) - second.x;
-    const long double dy =
-        static_cast<long double>(first.y) - second.y;
+    const SamplingScalar dx =
+        static_cast<SamplingScalar>(first.x) - second.x;
+    const SamplingScalar dy =
+        static_cast<SamplingScalar>(first.y) - second.y;
     return dx * dx + dy * dy;
 }
 
-long double squared_distance_to_segment(
+SamplingScalar squared_distance_to_segment(
     const FloatPoint& point,
     const FloatPoint& a,
     const FloatPoint& b) {
-    const long double dx = static_cast<long double>(b.x) - a.x;
-    const long double dy = static_cast<long double>(b.y) - a.y;
-    const long double length_squared = dx * dx + dy * dy;
-    if (length_squared == 0.0L) {
+    const SamplingScalar dx = static_cast<SamplingScalar>(b.x) - a.x;
+    const SamplingScalar dy = static_cast<SamplingScalar>(b.y) - a.y;
+    const SamplingScalar length_squared = dx * dx + dy * dy;
+    if (length_squared == 0.0) {
         return squared_distance(point, a);
     }
-    const long double projection = std::clamp(
-        ((static_cast<long double>(point.x) - a.x) * dx +
-         (static_cast<long double>(point.y) - a.y) * dy) /
+    const SamplingScalar projection = std::clamp(
+        ((static_cast<SamplingScalar>(point.x) - a.x) * dx +
+         (static_cast<SamplingScalar>(point.y) - a.y) * dy) /
             length_squared,
-        0.0L,
-        1.0L);
-    const long double nearest_x = a.x + projection * dx;
-    const long double nearest_y = a.y + projection * dy;
-    const long double point_dx = point.x - nearest_x;
-    const long double point_dy = point.y - nearest_y;
+        0.0,
+        1.0);
+    const SamplingScalar nearest_x = a.x + projection * dx;
+    const SamplingScalar nearest_y = a.y + projection * dy;
+    const SamplingScalar point_dx = point.x - nearest_x;
+    const SamplingScalar point_dy = point.y - nearest_y;
     return point_dx * point_dx + point_dy * point_dy;
 }
 
-long double polygon_boundary_distance_squared(
+SamplingScalar polygon_boundary_distance_squared(
     const FloatPoint& point,
     const PolygonDomain& domain,
     const std::vector<FloatPoint>& points) {
-    long double minimum = std::numeric_limits<long double>::max();
+    SamplingScalar minimum = std::numeric_limits<SamplingScalar>::max();
     const auto inspect_ring = [&](const std::vector<std::uint32_t>& ring) {
         for (std::size_t i = 0; i < ring.size(); ++i) {
             minimum = std::min(
@@ -287,14 +289,14 @@ long double polygon_boundary_distance_squared(
     return minimum;
 }
 
-long double bounds_boundary_distance_squared(
+SamplingScalar bounds_boundary_distance_squared(
     const FloatPoint& point,
     const SamplingBounds& bounds) {
-    const long double distance = std::min({
-        static_cast<long double>(point.x - bounds.min_x),
-        static_cast<long double>(bounds.max_x - point.x),
-        static_cast<long double>(point.y - bounds.min_y),
-        static_cast<long double>(bounds.max_y - point.y),
+    const SamplingScalar distance = std::min({
+        static_cast<SamplingScalar>(point.x - bounds.min_x),
+        static_cast<SamplingScalar>(bounds.max_x - point.x),
+        static_cast<SamplingScalar>(point.y - bounds.min_y),
+        static_cast<SamplingScalar>(bounds.max_y - point.y),
     });
     return distance * distance;
 }
@@ -312,11 +314,11 @@ public:
             return;
         }
 
-        const long double horizontal = std::ceil(std::sqrt(
-            static_cast<long double>(point_count) * width / height));
+        const SamplingScalar horizontal = std::ceil(std::sqrt(
+            static_cast<SamplingScalar>(point_count) * width / height));
         const bool single_row =
             !std::isfinite(horizontal) ||
-            horizontal >= static_cast<long double>(point_count);
+            horizontal >= static_cast<SamplingScalar>(point_count);
         x_cells_ = single_row
                        ? point_count
                        : std::max<std::size_t>(
@@ -342,14 +344,14 @@ public:
         heads_[index] = point_index;
     }
 
-    long double nearest_distance_squared(
+    SamplingScalar nearest_distance_squared(
         const FloatPoint& candidate,
         const std::vector<FloatPoint>& accepted,
-        long double upper_bound,
+        SamplingScalar upper_bound,
         std::size_t ignored_point =
             std::numeric_limits<std::size_t>::max()) const {
         if (accepted.size() <= (ignored_point < accepted.size() ? 1U : 0U) ||
-            upper_bound <= 0.0L) {
+            upper_bound <= 0.0) {
             return upper_bound;
         }
         if (heads_.empty()) {
@@ -378,7 +380,7 @@ public:
                 accepted,
                 upper_bound,
                 ignored_point);
-            if (upper_bound == 0.0L ||
+            if (upper_bound == 0.0 ||
                 outside_distance_squared(cells, candidate) >= upper_bound) {
                 break;
             }
@@ -449,7 +451,7 @@ private:
         std::size_t y,
         const FloatPoint& candidate,
         const std::vector<FloatPoint>& accepted,
-        long double& minimum,
+        SamplingScalar& minimum,
         std::size_t ignored_point) const {
         std::size_t point = heads_[flat_index(x, y)];
         while (point != kNoPoint) {
@@ -465,7 +467,7 @@ private:
         const CellRing& cells,
         const FloatPoint& candidate,
         const std::vector<FloatPoint>& accepted,
-        long double& minimum,
+        SamplingScalar& minimum,
         std::size_t ignored_point) const {
         if (cells.has_bottom) {
             for (std::size_t x = cells.min_x; x <= cells.max_x; ++x) {
@@ -522,21 +524,21 @@ private:
         }
     }
 
-    long double outside_distance_squared(
+    SamplingScalar outside_distance_squared(
         const CellRing& cells,
         const FloatPoint& candidate) const {
-        long double distance = std::numeric_limits<long double>::max();
+        SamplingScalar distance = std::numeric_limits<SamplingScalar>::max();
         if (cells.min_x != 0) {
             distance = std::min(
                 distance,
-                static_cast<long double>(candidate.x) -
+                static_cast<SamplingScalar>(candidate.x) -
                     (bounds_.min_x +
                      static_cast<double>(cells.min_x) * cell_width_));
         }
         if (cells.max_x + 1 != x_cells_) {
             distance = std::min(
                 distance,
-                static_cast<long double>(
+                static_cast<SamplingScalar>(
                     (bounds_.min_x +
                      static_cast<double>(cells.max_x + 1) * cell_width_) -
                     candidate.x));
@@ -544,14 +546,14 @@ private:
         if (cells.min_y != 0) {
             distance = std::min(
                 distance,
-                static_cast<long double>(candidate.y) -
+                static_cast<SamplingScalar>(candidate.y) -
                     (bounds_.min_y +
                      static_cast<double>(cells.min_y) * cell_height_));
         }
         if (cells.max_y + 1 != y_cells_) {
             distance = std::min(
                 distance,
-                static_cast<long double>(
+                static_cast<SamplingScalar>(
                     (bounds_.min_y +
                      static_cast<double>(cells.max_y + 1) * cell_height_) -
                     candidate.y));
@@ -580,38 +582,38 @@ constexpr std::array<double, 4> kRemovalSeparationFactors = {
     1.0,
     0.0,
 };
-constexpr long double kDensityIncrease = 1.002L;
-constexpr long double kDensityDecrease = 0.998L;
-constexpr long double kPi =
-    3.141592653589793238462643383279502884L;
-constexpr long double kSqrtThree =
-    1.732050807568877293527446341505872367L;
+constexpr SamplingScalar kDensityIncrease = 1.002;
+constexpr SamplingScalar kDensityDecrease = 0.998;
+constexpr SamplingScalar kPi =
+    3.141592653589793238462643383279502884;
+constexpr SamplingScalar kSqrtThree =
+    1.732050807568877293527446341505872367;
 
-long double ring_area_twice(
+SamplingScalar ring_area_twice(
     const std::vector<std::uint32_t>& ring,
     const std::vector<FloatPoint>& points) {
-    long double area = 0.0L;
+    SamplingScalar area = 0.0;
     for (std::size_t i = 0; i < ring.size(); ++i) {
         const FloatPoint& first = points[ring[i]];
         const FloatPoint& second = points[ring[(i + 1) % ring.size()]];
-        area += static_cast<long double>(first.x) * second.y -
-                static_cast<long double>(first.y) * second.x;
+        area += static_cast<SamplingScalar>(first.x) * second.y -
+                static_cast<SamplingScalar>(first.y) * second.x;
     }
     return std::abs(area);
 }
 
-long double polygon_area(
+SamplingScalar polygon_area(
     const std::vector<FloatPoint>& points,
     const std::vector<PolygonDomain>& domains) {
-    long double area_twice = 0.0L;
+    SamplingScalar area_twice = 0.0;
     for (const PolygonDomain& domain : domains) {
-        long double domain_area = ring_area_twice(domain.outer_ring, points);
+        SamplingScalar domain_area = ring_area_twice(domain.outer_ring, points);
         for (const std::vector<std::uint32_t>& hole : domain.holes) {
             domain_area -= ring_area_twice(hole, points);
         }
-        area_twice += std::max(0.0L, domain_area);
+        area_twice += std::max(0.0, domain_area);
     }
-    return area_twice * 0.5L;
+    return area_twice * 0.5;
 }
 
 class SamplingRegionView {
@@ -637,11 +639,11 @@ public:
                    : bounds_contain(bounds_, point);
     }
 
-    long double area() const {
+    SamplingScalar area() const {
         if (is_polygon()) {
             return polygon_area(polygon_points_, domains_);
         }
-        return static_cast<long double>(bounds_.max_x - bounds_.min_x) *
+        return static_cast<SamplingScalar>(bounds_.max_x - bounds_.min_x) *
                (bounds_.max_y - bounds_.min_y);
     }
 
@@ -664,7 +666,7 @@ public:
         return {{x_coordinate(random), y_coordinate(random)}, 0};
     }
 
-    long double boundary_distance_squared(
+    SamplingScalar boundary_distance_squared(
         const RegionCandidate& candidate) const {
         return is_polygon()
                    ? polygon_boundary_distance_squared(
@@ -689,11 +691,11 @@ FloatPoint choose_best_candidate(
     const NearestNeighborGrid& grid,
     const std::vector<FloatPoint>& accepted) {
     FloatPoint best;
-    long double best_distance_squared = -1.0L;
+    SamplingScalar best_distance_squared = -1.0;
     for (std::size_t sample = 0; sample < candidate_count; ++sample) {
         const RegionCandidate candidate =
             region.random_candidate(random, attempts_per_candidate);
-        const long double minimum_distance_squared =
+        const SamplingScalar minimum_distance_squared =
             grid.nearest_distance_squared(
                 candidate.point,
                 accepted,
@@ -716,7 +718,7 @@ std::vector<FloatPoint> trim_crowded_points(
     }
 
     struct Score {
-        long double nearest_distance_squared = 0.0L;
+        SamplingScalar nearest_distance_squared = 0.0;
         std::size_t point = 0;
     };
 
@@ -731,7 +733,7 @@ std::vector<FloatPoint> trim_crowded_points(
             grid.nearest_distance_squared(
                 points[point],
                 points,
-                std::numeric_limits<long double>::max(),
+                std::numeric_limits<SamplingScalar>::max(),
                 point),
             point,
         });
@@ -753,9 +755,9 @@ std::vector<FloatPoint> trim_crowded_points(
     std::vector<std::size_t> removals;
     removals.reserve(removal_count);
     for (const double factor : kRemovalSeparationFactors) {
-        const long double separation =
-            static_cast<long double>(factor) * nominal_spacing;
-        const long double separation_squared = separation * separation;
+        const SamplingScalar separation =
+            static_cast<SamplingScalar>(factor) * nominal_spacing;
+        const SamplingScalar separation_squared = separation * separation;
         for (const Score& score : scores) {
             if (removed[score.point]) {
                 continue;
@@ -847,15 +849,15 @@ struct LatticeAttempt {
 
 LatticeAttempt generate_lattice_attempt(
     const SamplingRegionView& region,
-    long double region_area,
+    SamplingScalar region_area,
     std::size_t target_count,
-    long double target_density,
+    SamplingScalar target_density,
     double jitter,
     std::uint64_t seed,
     std::size_t remaining_candidates) {
-    const long double spacing_value = std::sqrt(
-        2.0L * region_area / (kSqrtThree * target_density));
-    if (!std::isfinite(spacing_value) || spacing_value <= 0.0L ||
+    const SamplingScalar spacing_value = std::sqrt(
+        2.0 * region_area / (kSqrtThree * target_density));
+    if (!std::isfinite(spacing_value) || spacing_value <= 0.0 ||
         spacing_value > std::numeric_limits<double>::max()) {
         throw_candidate_limit_error();
     }
@@ -863,13 +865,13 @@ LatticeAttempt generate_lattice_attempt(
     LatticeAttempt attempt;
     attempt.spacing = static_cast<double>(spacing_value);
     const double row_spacing =
-        static_cast<double>(0.5L * kSqrtThree) * attempt.spacing;
+        static_cast<double>(0.5 * kSqrtThree) * attempt.spacing;
     const double jitter_radius = 0.5 * jitter * attempt.spacing;
 
     std::mt19937_64 random(seed);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     std::uniform_real_distribution<double> signed_unit(-1.0, 1.0);
-    const double angle = unit(random) * static_cast<double>(kPi / 3.0L);
+    const double angle = unit(random) * static_cast<double>(kPi / 3.0);
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
     const double phase_x = unit(random) * attempt.spacing;
@@ -889,11 +891,11 @@ LatticeAttempt generate_lattice_attempt(
     const double first_y =
         std::floor((-vertical_extent - phase_y) / row_spacing) * row_spacing +
         phase_y;
-    const long double row_count_value = std::floor(
-        (static_cast<long double>(vertical_extent) - first_y) / row_spacing) +
-        1.0L;
-    if (!std::isfinite(row_count_value) || row_count_value <= 0.0L ||
-        row_count_value > static_cast<long double>(remaining_candidates)) {
+    const SamplingScalar row_count_value = std::floor(
+        (static_cast<SamplingScalar>(vertical_extent) - first_y) /
+        row_spacing) + 1.0;
+    if (!std::isfinite(row_count_value) || row_count_value <= 0.0 ||
+        row_count_value > static_cast<SamplingScalar>(remaining_candidates)) {
         throw_candidate_limit_error();
     }
     const std::size_t row_count = static_cast<std::size_t>(row_count_value);
@@ -914,13 +916,13 @@ LatticeAttempt generate_lattice_attempt(
                 attempt.spacing) *
                 attempt.spacing +
             phase_x + row_offset;
-        const long double column_count_value = std::floor(
-            (static_cast<long double>(horizontal_extent) - first_x) /
-            attempt.spacing) + 1.0L;
+        const SamplingScalar column_count_value = std::floor(
+            (static_cast<SamplingScalar>(horizontal_extent) - first_x) /
+            attempt.spacing) + 1.0;
         if (!std::isfinite(column_count_value) ||
-            column_count_value <= 0.0L ||
+            column_count_value <= 0.0 ||
             column_count_value >
-                static_cast<long double>(remaining_candidates -
+                static_cast<SamplingScalar>(remaining_candidates -
                                          attempt.candidates_examined)) {
             throw_candidate_limit_error();
         }
@@ -996,14 +998,14 @@ std::optional<std::vector<FloatPoint>> reconcile_sample_count(
     return std::nullopt;
 }
 
-long double adjusted_density(
-    long double current_density,
+SamplingScalar adjusted_density(
+    SamplingScalar current_density,
     std::size_t observed_count,
     std::size_t target_count) {
-    const long double observed =
-        std::max(1.0L, static_cast<long double>(observed_count));
-    const long double correction =
-        static_cast<long double>(target_count) / observed;
+    const SamplingScalar observed =
+        std::max(1.0, static_cast<SamplingScalar>(observed_count));
+    const SamplingScalar correction =
+        static_cast<SamplingScalar>(target_count) / observed;
     if (observed_count < target_count) {
         return std::max(
             current_density * kDensityIncrease,
@@ -1016,11 +1018,11 @@ long double adjusted_density(
 
 std::vector<FloatPoint> generate_jittered_samples(
     const SamplingRegionView& region,
-    long double region_area,
+    SamplingScalar region_area,
     const JitteredGridSamplingOptions& options,
     std::size_t maximum_candidates) {
-    long double target_density =
-        static_cast<long double>(options.point_count);
+    SamplingScalar target_density =
+        static_cast<SamplingScalar>(options.point_count);
     std::size_t candidates_examined = 0;
     std::optional<LatticeAttempt> best_surplus;
 
@@ -1065,8 +1067,8 @@ std::vector<FloatPoint> generate_jittered_samples(
 
         target_density = adjusted_density(
             target_density, generated_count, options.point_count);
-        if (!std::isfinite(target_density) || target_density <= 0.0L ||
-            target_density > static_cast<long double>(maximum_candidates)) {
+        if (!std::isfinite(target_density) || target_density <= 0.0 ||
+            target_density > static_cast<SamplingScalar>(maximum_candidates)) {
             throw_candidate_limit_error();
         }
     }
@@ -1201,8 +1203,8 @@ std::vector<FloatPoint> PointSampler::generate_jittered_grid(
         "jittered-grid candidate limit overflows size_t");
     const SamplingRegionView region(
         bounds_, polygon_points_, domains_, domain_bounds_);
-    const long double region_area = region.area();
-    if (!std::isfinite(region_area) || region_area <= 0.0L) {
+    const SamplingScalar region_area = region.area();
+    if (!std::isfinite(region_area) || region_area <= 0.0) {
         throw std::runtime_error(
             "could not sample a point inside the configured polygon domains");
     }

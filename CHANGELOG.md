@@ -13,6 +13,8 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ### Changed
 
+- Floating-point polygon containment and sampling now use binary64 arithmetic
+  throughout, avoiding software-emulated IEEE-128 operations in WebAssembly.
 - Best-candidate sampling now uses per-domain bounds and an exact spatial
   nearest-neighbor index instead of scanning every accepted sample.
 - Jittered-grid sampling fits lattice density to the clipped region and uses
