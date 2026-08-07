@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(delaunay32 VERSION 0.6.1 LANGUAGES CXX)
+project(delaunay32 VERSION 0.6.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

@@ -9,7 +9,7 @@ remain backward compatible within that minor release.
 The project version is declared once in the top-level `CMakeLists.txt`:
 
 ```cmake
-project(delaunay32 VERSION 0.6.1 LANGUAGES CXX)
+project(delaunay32 VERSION 0.6.2 LANGUAGES CXX)
 ```
 
 The generated CMake package configuration uses this value. Do not maintain a
