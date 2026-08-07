@@ -443,9 +443,16 @@ blue_noise.candidates_per_point = 16;
 blue_noise.seed = 42;
 const std::vector<delaunay32::FloatPoint> spaced_points =
     sampler.generate_blue_noise(blue_noise);
+
+delaunay32::extras::JitteredGridSamplingOptions fast_spaced;
+fast_spaced.point_count = 500;
+fast_spaced.jitter = 0.75;
+fast_spaced.seed = 42;
+const std::vector<delaunay32::FloatPoint> demo_points =
+    sampler.generate_jittered_grid(fast_spaced);
 ```
 
-`SamplingBounds` uses `{min_x, max_x, min_y, max_y}` order. Both algorithms
+`SamplingBounds` uses `{min_x, max_x, min_y, max_y}` order. All algorithms
 operate on either configured region. Calling `set_bounds()` or
 `set_polygon_interiors()` replaces the previous region, and generation before
 setting a region throws `std::logic_error`. Each call owns an independent
@@ -467,9 +474,25 @@ const std::vector<delaunay32::FloatPoint> interiors =
 
 Polygon samples are strictly inside an outer ring and outside its holes.
 Multiple domains form one sampling region. Uniform sampling uses rejection
-sampling over that region, while blue-noise sampling also maximizes distance
-from domain boundaries and previously accepted samples. The attempt limits in
-the option structs bound work for very small or invalid sampling regions.
+sampling over that region. Best-candidate blue noise maximizes distance from
+domain boundaries and previously accepted samples. It uses an exact spatial
+nearest-neighbor index, but still evaluates `candidates_per_point` polygon
+candidates for every result.
+
+`generate_jittered_grid()` is the fast visual-demo path. It builds a triangular
+lattice with a seed-derived random rotation and phase offset, then perturbs
+each site in a uniformly random direction inside a disk. Candidates are
+clipped to the polygon region, and the sampler returns exactly `point_count`
+points. A `jitter` of zero preserves the lattice sites; one permits movement
+by half the lattice spacing. The default `0.75` is a compromise between strong
+spacing and visible lattice structure. Lattice density is fitted to the
+observed clipped count. Small surpluses are removed from locally crowded,
+mutually separated sites; small shortages are filled with best-candidate gap
+samples. This avoids randomly punching visible holes into a low-jitter
+lattice. Use best-candidate blue noise when boundary clearance matters more
+than generation time; use the jittered grid when sampling should be cheaper
+than triangulation. The attempt limits bound work for very small or sparse
+polygon regions.
 
 Uniform sampling does not inject fixed points by default. Set
 `include_bounds_corners` to `true` to place the distinct rectangle corners at

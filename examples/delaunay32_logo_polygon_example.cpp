@@ -16,8 +16,8 @@
 
 namespace {
 
-constexpr std::size_t kBlueNoisePointCount = 625;
-constexpr std::size_t kBestCandidateCount = 16;
+constexpr std::size_t kInteriorPointCount = 625;
+constexpr double kGridJitter = 0.4;
 constexpr std::uint64_t kSeed = 1;
 
 }  // namespace
@@ -48,12 +48,12 @@ int main(int argc, char** argv) {
         // 2. Generate well-spaced points inside the letters but outside holes.
         delaunay32::extras::PointSampler sampler;
         sampler.set_polygon_interiors(geometry.points, geometry.polygons);
-        delaunay32::extras::BlueNoiseSamplingOptions sampling_options;
-        sampling_options.point_count = kBlueNoisePointCount;
-        sampling_options.candidates_per_point = kBestCandidateCount;
+        delaunay32::extras::JitteredGridSamplingOptions sampling_options;
+        sampling_options.point_count = kInteriorPointCount;
+        sampling_options.jitter = kGridJitter;
         sampling_options.seed = kSeed;
         const std::vector<delaunay32::FloatPoint> interior_points =
-            sampler.generate_blue_noise(sampling_options);
+            sampler.generate_jittered_grid(sampling_options);
 
         // 3. Quantize outlines and samples together so they share one mapping.
         // Keeping the same order preserves every polygon and triangle index.
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
         title_style.font_size = 19.0;
         title_style.font_weight = "650";
         svg.draw_text(
-            "Delaunay32 | polygon domains with blue-noise samples",
+            "Delaunay32 | polygon domains with jittered-grid samples",
             28.0,
             34.0,
             title_style);
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
 
         std::cout << "wrote " << output_path << ": "
                   << interior_points.size()
-                  << " blue-noise interior points, "
+                  << " jittered-grid interior points, "
                   << outline_point_count << " outline points, "
                   << polygon_count << " polygon domains, "
                   << result.triangles.size() << " domain triangles, "

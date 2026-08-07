@@ -52,6 +52,17 @@ void expect_logic_error(Function function, const char* message) {
     expect(rejected, message);
 }
 
+template <typename Function>
+void expect_runtime_error(Function function, const char* message) {
+    bool rejected = false;
+    try {
+        function();
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    expect(rejected, message);
+}
+
 std::size_t count_substring(
     const std::string& text,
     const std::string& substring) {
@@ -69,6 +80,9 @@ void validate_sampling() {
     expect_logic_error(
         [&] { sampler.generate_uniform(); },
         "sampling without a region was accepted");
+    expect_logic_error(
+        [&] { sampler.generate_jittered_grid(); },
+        "jittered-grid sampling without a region was accepted");
     expect_invalid_argument(
         [&] {
             sampler.set_bounds({
@@ -132,6 +146,60 @@ void validate_sampling() {
                 blue_first[i].y >= -20.0 && blue_first[i].y <= 90.0,
             "blue-noise sample is outside bounds");
     }
+
+    delaunay32::extras::JitteredGridSamplingOptions jittered;
+    jittered.point_count = 32;
+    jittered.jitter = 0.1;
+    jittered.seed = 19;
+    const std::vector<delaunay32::FloatPoint> jittered_first =
+        sampler.generate_jittered_grid(jittered);
+    const std::vector<delaunay32::FloatPoint> jittered_repeated =
+        sampler.generate_jittered_grid(jittered);
+    jittered.seed = 20;
+    const std::vector<delaunay32::FloatPoint> jittered_other_seed =
+        sampler.generate_jittered_grid(jittered);
+    expect(
+        jittered_first.size() == 32,
+        "wrong bounds jittered-grid sample count");
+    for (std::size_t i = 0; i < jittered_first.size(); ++i) {
+        expect(
+            jittered_first[i].x == jittered_repeated[i].x &&
+                jittered_first[i].y == jittered_repeated[i].y,
+            "jittered-grid sampling is not deterministic");
+        expect(
+            jittered_first[i].x >= -50.0 && jittered_first[i].x <= 70.0 &&
+                jittered_first[i].y >= -20.0 && jittered_first[i].y <= 90.0,
+            "jittered-grid sample is outside bounds");
+    }
+    expect(
+        jittered_first.front().x != jittered_other_seed.front().x ||
+            jittered_first.front().y != jittered_other_seed.front().y,
+        "jittered-grid seed did not change rotation, phase, or jitter");
+    for (const double jitter : {0.0, 1.0}) {
+        for (const std::size_t point_count : {1U, 2U, 31U, 33U, 127U}) {
+            jittered.point_count = point_count;
+            jittered.jitter = jitter;
+            expect(
+                sampler.generate_jittered_grid(jittered).size() == point_count,
+                "jittered-grid count reconciliation failed");
+        }
+    }
+    jittered.point_count = 32;
+    jittered.jitter = 0.1;
+    jittered.attempts_per_point = 1;
+    expect_runtime_error(
+        [&] { sampler.generate_jittered_grid(jittered); },
+        "jittered-grid sampling ignored its candidate work limit");
+    jittered.jitter = 1.1;
+    jittered.attempts_per_point = 10000;
+    expect_invalid_argument(
+        [&] { sampler.generate_jittered_grid(jittered); },
+        "jittered-grid sampling accepted jitter above one");
+    jittered.jitter = 0.1;
+    jittered.attempts_per_point = 0;
+    expect_invalid_argument(
+        [&] { sampler.generate_jittered_grid(jittered); },
+        "jittered-grid sampling accepted zero attempts");
 
     const std::vector<Point> polygon_points = {
         {0, 0},
@@ -292,6 +360,15 @@ void validate_polygon_sampling(
         sampler.generate_blue_noise(options);
     expect(samples.size() == sample_count, "wrong polygon sample count");
 
+    delaunay32::extras::JitteredGridSamplingOptions jittered_options;
+    jittered_options.point_count = sample_count;
+    jittered_options.seed = 23;
+    const std::vector<delaunay32::FloatPoint> jittered_samples =
+        sampler.generate_jittered_grid(jittered_options);
+    expect(
+        jittered_samples.size() == sample_count,
+        "wrong polygon jittered-grid sample count");
+
     std::vector<delaunay32::FloatPoint> source;
     source.reserve(geometry.points.size() + samples.size());
     for (const Point& point : geometry.points) {
@@ -305,6 +382,12 @@ void validate_polygon_sampling(
             delaunay32::extras::point_is_strictly_inside_domain(
                 point, *geometry.polygon, source),
             "polygon sampler returned a point outside the domain");
+    }
+    for (const delaunay32::FloatPoint& point : jittered_samples) {
+        expect(
+            delaunay32::extras::point_is_strictly_inside_domain(
+                point, *geometry.polygon, source),
+            "polygon jittered-grid sampler returned a point outside the domain");
     }
     source.insert(source.end(), samples.begin(), samples.end());
     geometry.points = delaunay32::quantize(source).points;

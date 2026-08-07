@@ -3,6 +3,22 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 0.6.1 - 2026-08-08
+
+### Added
+
+- A deterministic, randomly rotated and phase-shifted triangular-lattice
+  sampler with isotropic jitter for fast blue-noise-like point sets in
+  rectangular bounds and indexed polygon interiors.
+
+### Changed
+
+- Best-candidate sampling now uses per-domain bounds and an exact spatial
+  nearest-neighbor index instead of scanning every accepted sample.
+- Jittered-grid sampling fits lattice density to the clipped region and uses
+  crowding-aware trimming or gap filling for small count corrections, avoiding
+  the visible holes caused by random removal from a fixed safety surplus.
+
 ## 0.6.0 - 2026-08-06
 
 ### Added
