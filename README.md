@@ -13,6 +13,10 @@ The core API accepts `std::int32_t` coordinates exclusively. Floating-point
 input is converted explicitly with the standalone `quantize()` utility before
 it reaches the triangulator.
 
+For browser and JavaScript/TypeScript use, see the
+[Delaunay32 WebAssembly package](https://github.com/morishuz/delaunay32-wasm)
+and its [interactive demo](https://morishuz.github.io/delaunay32-wasm/).
+
 ## Performance
 
 Approximate runtime for one million unconstrained points on the reference
