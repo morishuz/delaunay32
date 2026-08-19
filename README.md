@@ -30,6 +30,7 @@ Apple M1 system, normalized to eight-thread Delaunay32. Lower is better:
 | [Fade2D](https://www.geom.at/products/fade2d/) 2.17.3 | 1 | ~6.0× |
 | [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) | 1 | ~11× |
 | [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) 1.6 | 1 | ~11× |
+| [CDT](https://github.com/artem-ogre/CDT) 1.4.5 | 1 | ~20× |
 
 These rounded results come from separate Release-build runs and vary with
 machine and input distribution.
