@@ -23,7 +23,7 @@ Measured runtime for one million unique, unconstrained integer points on an
 Apple M1 (8 cores, 16 GB RAM), with triangle-only output. Relative runtime is
 normalized to eight-thread Delaunay32. Lower is better:
 
-| Implementation | Threads | Runtime | Relative to Delaunay32 (8 threads) |
+| Implementation | Threads | Runtime | Relative runtime |
 |:--|--:|--:|--:|
 | **Delaunay32** | **8** | **45.4 ms** | **1.0×** |
 | **Delaunay32** | **1** | **131.6 ms** | **2.9×** |
