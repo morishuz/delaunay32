@@ -401,10 +401,18 @@ private:
     void export_hull();
     static std::size_t checked_flat_edge_count(
         std::size_t triangle_count);
+    // Keep discovery inline in both triangle-only and full-result exporters.
     bool find_export_face(
         std::uint32_t start,
         std::uint32_t& second,
-        std::uint32_t& third) const;
+        std::uint32_t& third) const {
+        if ((edge_origin_[start] & kVisitedBit) != 0) {
+            return false;
+        }
+        second = lnext(start);
+        third = lnext(second);
+        return start <= second && start <= third;
+    }
 
     static std::uint32_t sym(std::uint32_t edge) { return edge ^ 1U; }
     std::uint32_t org(std::uint32_t edge) const { return edge_origin_[edge]; }

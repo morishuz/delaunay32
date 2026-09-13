@@ -5,6 +5,8 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ## Unreleased
 
+## 0.6.3 - 2026-09-14
+
 ### Fixed
 
 - Polygon clipping now crosses standalone constraints outside outer boundaries
@@ -26,6 +28,9 @@ Notable changes to Delaunay32 are documented here. The project follows
   tests and uses a balanced spatial index for rings with at least 64 edges.
 - Full-result export uses existing face-exclusion flags to resolve boundary
   halfedges without first clearing the complete dart-to-output map.
+- Full-result export builds adjacency in triangle order and inlines face
+  discovery, reducing repeated scans of topology storage without adding a
+  scratch buffer or changing the result format.
 - Serial Morton ordering now builds digit histograms in one scan and uses up
   to three 11/11/10-bit radix passes for wider keys, retaining smaller 10-bit
   tables for keys below 2^20 and reusing the existing scratch buffers.

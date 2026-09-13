@@ -46,18 +46,6 @@ void Triangulator::export_triangles() {
     }
 }
 
-bool Triangulator::find_export_face(
-    std::uint32_t start,
-    std::uint32_t& second,
-    std::uint32_t& third) const {
-    if ((edge_origin_[start] & kVisitedBit) != 0) {
-        return false;
-    }
-    second = lnext(start);
-    third = lnext(second);
-    return start <= second && start <= third;
-}
-
 void Triangulator::export_triangles_parallel(
     std::size_t thread_count,
     detail::WorkerTeam& workers) {

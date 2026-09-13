@@ -1905,6 +1905,45 @@ void test_parallel_polygon() {
                 "full polygon export changed the triangle set");
         require_exported_adjacency(full, "parallel polygon export reuse");
     }
+
+    // A tiny retained domain leaves most arena ranges without output faces.
+    // Exercise empty worker slices, then reuse the same instance for both a
+    // collinear result and a complete mesh with a much larger output.
+    const std::vector<std::uint32_t> tiny_outer = {
+        index(3, 3), index(9, 3), index(9, 9), index(3, 9),
+    };
+    const std::vector<std::vector<std::uint32_t>> tiny_holes = {{
+        index(5, 5), index(7, 5), index(7, 7), index(5, 7),
+    }};
+    const std::vector<Point> collinear = {
+        {3, 7}, {-4, 7}, {9, 7}, {0, 7}, {3, 7},
+    };
+    for (const std::size_t threads : {1U, 8U}) {
+        configure(parallel, threads, ResultDetail::Full);
+        parallel.set_points(points);
+        parallel.set_polygons({{tiny_outer, tiny_holes}});
+        const auto tiny = parallel.triangulate();
+        require(tiny.report.actual_thread_count == threads,
+                "sparse full export used the wrong thread count");
+        require_valid_polygon_mesh(
+            points, tiny.triangles, tiny_outer, tiny_holes,
+            "sparse full polygon export");
+        require_exported_adjacency(tiny, "sparse full polygon export");
+
+        parallel.set_points(collinear);
+        const auto empty = parallel.triangulate();
+        require(empty.triangles.empty() && empty.halfedges.empty() &&
+                    empty.hull == std::vector<std::uint32_t>({1, 2}) &&
+                    empty.representatives ==
+                        std::vector<std::uint32_t>({0, 1, 2, 3, 0}),
+                "full export retained data after collinear reuse");
+
+        parallel.set_points(points);
+        const auto restored = parallel.triangulate();
+        require(benchmark_support::meshes_equal(restored.triangles, complete),
+                "full export lost faces after sparse and collinear reuse");
+        require_full_topology(points, restored, "restored full export");
+    }
 }
 
 void test_invalid_polygons() {

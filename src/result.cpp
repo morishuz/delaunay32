@@ -91,11 +91,9 @@ void Triangulator::export_full_result() {
                 throw std::length_error(
                     "internal halfedge index range exceeded");
             }
-            triangles_out_.push_back({
-                points_[org(start)].original,
-                points_[org(second)].original,
-                points_[org(third)].original,
-            });
+            // Keep the face's darts until every dart-to-output entry exists.
+            // Reuse this buffer so adjacency can be written in output order.
+            triangles_out_.push_back({start, second, third});
             edge_next_[start] = static_cast<std::uint32_t>(flat_edge);
             edge_next_[second] =
                 static_cast<std::uint32_t>(flat_edge + 1);
@@ -106,18 +104,23 @@ void Triangulator::export_full_result() {
     halfedges_out_.resize(
         checked_flat_edge_count(triangles_out_.size()));
 
-    for (const EdgeRange range : edge_ranges_) {
-        for (std::uint32_t dart = range.first; dart < range.last; ++dart) {
-            if ((edge_origin_[dart] & kVisitedBit) != 0) {
-                continue;
-            }
-            const std::uint32_t flat_edge = edge_next_[dart];
+    // Convert the temporary dart triples only after the complete map is ready.
+    // Visit only retained faces and write halfedges in contiguous output order.
+    std::size_t flat_edge = 0;
+    for (Triangle& triangle : triangles_out_) {
+        for (const std::uint32_t dart :
+             {triangle.i0, triangle.i1, triangle.i2}) {
             const std::uint32_t opposite = sym(dart);
-            halfedges_out_[flat_edge] =
+            halfedges_out_[flat_edge++] =
                 (edge_origin_[opposite] & kVisitedBit) != 0
                     ? -1
                     : static_cast<std::int64_t>(edge_next_[opposite]);
         }
+        triangle = {
+            points_[org(triangle.i0)].original,
+            points_[org(triangle.i1)].original,
+            points_[org(triangle.i2)].original,
+        };
     }
     export_hull();
 }
@@ -138,9 +141,11 @@ void Triangulator::export_full_result_parallel(
     std::vector<std::size_t> offsets(worker_count + 1, 0);
     ThreadBarrier barrier(worker_count);
 
-    // Count faces, allocate exact output sizes, export faces and the dense
-    // dart map, then resolve opposite darts after every worker has published
-    // its map entries. An abortable barrier makes resize failure phase-safe.
+    // Count faces, allocate exact output sizes, and store face darts in the
+    // triangle buffer while building the dart-to-output map. Once every worker
+    // has published its map entries, convert those triples to original vertex
+    // indices and write adjacent halfedges in contiguous output slices.
+    // An abortable barrier makes allocation failure phase-safe.
     const auto run = [&](std::size_t worker_index) {
         try {
             const std::size_t first_range =
@@ -194,11 +199,7 @@ void Triangulator::export_full_result_parallel(
                         continue;
                     }
                     const std::size_t flat_edge = triangle_index * 3;
-                    triangles_out_[triangle_index] = {
-                        points_[org(start)].original,
-                        points_[org(second)].original,
-                        points_[org(third)].original,
-                    };
+                    triangles_out_[triangle_index] = {start, second, third};
                     edge_next_[start] =
                         static_cast<std::uint32_t>(flat_edge);
                     edge_next_[second] =
@@ -212,23 +213,24 @@ void Triangulator::export_full_result_parallel(
             if (!barrier.wait()) {
                 return;
             }
-            for (std::size_t index = first_range;
-                 index < last_range;
-                 ++index) {
-                const EdgeRange range = edge_ranges_[index];
-                for (std::uint32_t dart = range.first;
-                     dart < range.last;
-                     ++dart) {
-                    if ((edge_origin_[dart] & kVisitedBit) != 0) {
-                        continue;
-                    }
-                    const std::uint32_t flat_edge = edge_next_[dart];
+            for (std::size_t i = offsets[worker_index];
+                 i < offsets[worker_index + 1];
+                 ++i) {
+                Triangle& triangle = triangles_out_[i];
+                std::size_t flat_edge = i * 3;
+                for (const std::uint32_t dart :
+                     {triangle.i0, triangle.i1, triangle.i2}) {
                     const std::uint32_t opposite = sym(dart);
-                    halfedges_out_[flat_edge] =
+                    halfedges_out_[flat_edge++] =
                         (edge_origin_[opposite] & kVisitedBit) != 0
                             ? -1
                             : static_cast<std::int64_t>(edge_next_[opposite]);
                 }
+                triangle = {
+                    points_[org(triangle.i0)].original,
+                    points_[org(triangle.i1)].original,
+                    points_[org(triangle.i2)].original,
+                };
             }
         } catch (...) {
             barrier.abort();
