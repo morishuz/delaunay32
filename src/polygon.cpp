@@ -17,6 +17,130 @@ using SiteIndex = std::uint32_t;
 using Ring = std::vector<SiteIndex>;
 using Rings = std::vector<Ring>;
 
+struct EdgeBounds {
+    std::int32_t min_x;
+    std::int32_t max_x;
+    std::int32_t min_y;
+    std::int32_t max_y;
+
+    bool overlaps(const EdgeBounds& other) const {
+        return min_x <= other.max_x && other.min_x <= max_x &&
+               min_y <= other.max_y && other.min_y <= max_y;
+    }
+};
+
+template <typename Sites>
+EdgeBounds edge_bounds(const Sites& sites, SiteIndex a, SiteIndex b) {
+    return {
+        std::min(sites[a].x, sites[b].x),
+        std::max(sites[a].x, sites[b].x),
+        std::min(sites[a].y, sites[b].y),
+        std::max(sites[a].y, sites[b].y),
+    };
+}
+
+constexpr std::size_t kIndexedRingSize = 64;
+
+// A balanced bounding-box tree only rejects disjoint edge pairs. Candidate
+// pairs still use the exact predicates below, including endpoint contacts.
+class RingEdgeIndex {
+public:
+    template <typename Sites>
+    RingEdgeIndex(const Sites& sites, const Ring& ring) {
+        edges_.reserve(ring.size());
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            edges_.push_back({
+                edge_bounds(sites, ring[i], ring[(i + 1) % ring.size()]), i});
+        }
+        nodes_.reserve(ring.size());
+        build(0, edges_.size());
+    }
+
+    template <typename Predicate>
+    bool any_overlap(
+        const EdgeBounds& bounds,
+        const Predicate& predicate) const {
+        return query(0, bounds, predicate);
+    }
+
+private:
+    static constexpr std::size_t kLeafSize = 8;
+    struct Edge {
+        EdgeBounds bounds;
+        std::size_t index;
+    };
+    struct Node {
+        EdgeBounds bounds;
+        std::size_t first;
+        std::size_t last;
+        std::size_t right = 0;
+    };
+    std::vector<Edge> edges_;
+    std::vector<Node> nodes_;
+
+    std::size_t build(std::size_t first, std::size_t last) {
+        EdgeBounds bounds = edges_[first].bounds;
+        for (std::size_t i = first + 1; i < last; ++i) {
+            const EdgeBounds& edge = edges_[i].bounds;
+            bounds.min_x = std::min(bounds.min_x, edge.min_x);
+            bounds.max_x = std::max(bounds.max_x, edge.max_x);
+            bounds.min_y = std::min(bounds.min_y, edge.min_y);
+            bounds.max_y = std::max(bounds.max_y, edge.max_y);
+        }
+        const std::size_t node = nodes_.size();
+        nodes_.push_back({bounds, first, last});
+        if (last - first > kLeafSize) {
+            const bool split_x =
+                static_cast<std::int64_t>(bounds.max_x) - bounds.min_x >=
+                static_cast<std::int64_t>(bounds.max_y) - bounds.min_y;
+            const std::size_t middle = first + (last - first) / 2;
+            std::nth_element(
+                edges_.begin() + static_cast<std::ptrdiff_t>(first),
+                edges_.begin() + static_cast<std::ptrdiff_t>(middle),
+                edges_.begin() + static_cast<std::ptrdiff_t>(last),
+                [split_x](const Edge& a, const Edge& b) {
+                    const auto center = [split_x](const EdgeBounds& box) {
+                        return split_x
+                                   ? static_cast<std::int64_t>(box.min_x) +
+                                         box.max_x
+                                   : static_cast<std::int64_t>(box.min_y) +
+                                         box.max_y;
+                    };
+                    const std::int64_t ac = center(a.bounds);
+                    const std::int64_t bc = center(b.bounds);
+                    return ac != bc ? ac < bc : a.index < b.index;
+                });
+            // The left child immediately follows its parent.
+            build(first, middle);
+            const std::size_t right = build(middle, last);
+            nodes_[node].right = right;
+        }
+        return node;
+    }
+
+    template <typename Predicate>
+    bool query(
+        std::size_t index,
+        const EdgeBounds& bounds,
+        const Predicate& predicate) const {
+        const Node& node = nodes_[index];
+        if (!node.bounds.overlaps(bounds)) {
+            return false;
+        }
+        if (node.right != 0) {
+            return query(index + 1, bounds, predicate) ||
+                   query(node.right, bounds, predicate);
+        }
+        for (std::size_t i = node.first; i < node.last; ++i) {
+            if (edges_[i].bounds.overlaps(bounds) &&
+                predicate(edges_[i].index)) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 Ring map_ring_indices(
     const std::vector<std::uint32_t>& input,
     const std::vector<std::uint32_t>& original_to_site) {
@@ -69,6 +193,9 @@ bool segments_intersect_or_touch(
     SiteIndex b,
     SiteIndex c,
     SiteIndex d) {
+    if (!edge_bounds(sites, a, b).overlaps(edge_bounds(sites, c, d))) {
+        return false;
+    }
     const std::int64_t ab_c = orientation(a, b, c);
     const std::int64_t ab_d = orientation(a, b, d);
     const std::int64_t cd_a = orientation(c, d, a);
@@ -94,40 +221,54 @@ void validate_simple_ring(
     const Orientation& orientation,
     const Ring& ring) {
     const std::size_t size = ring.size();
-    for (std::size_t i = 0; i < size; ++i) {
+    const auto intersects = [&](std::size_t i, std::size_t j) {
         const SiteIndex a = ring[i];
         const SiteIndex b = ring[(i + 1) % size];
-        for (std::size_t j = i + 1; j < size; ++j) {
-            const SiteIndex c = ring[j];
-            const SiteIndex d = ring[(j + 1) % size];
-            const bool adjacent =
-                j == i + 1 || (i == 0 && j + 1 == size);
-            if (!adjacent) {
-                if (segments_intersect_or_touch(
-                        sites, orientation, a, b, c, d)) {
-                    throw std::invalid_argument(
-                        "polygon ring is not simple");
-                }
-                continue;
-            }
+        const SiteIndex c = ring[j];
+        const SiteIndex d = ring[(j + 1) % size];
+        const bool adjacent =
+            j == i + 1 || (i == 0 && j + 1 == size);
+        if (!adjacent) {
+            return segments_intersect_or_touch(
+                sites, orientation, a, b, c, d);
+        }
 
-            const SiteIndex shared = a == c || a == d ? a : b;
-            const SiteIndex first_other = a == shared ? b : a;
-            const SiteIndex second_other = c == shared ? d : c;
-            if (point_on_segment(
-                    sites,
-                    orientation,
-                    first_other,
-                    shared,
-                    second_other) ||
-                point_on_segment(
-                    sites,
-                    orientation,
-                    second_other,
-                    shared,
-                    first_other)) {
-                throw std::invalid_argument(
-                    "polygon ring has overlapping adjacent edges");
+        const SiteIndex shared = a == c || a == d ? a : b;
+        const SiteIndex first_other = a == shared ? b : a;
+        const SiteIndex second_other = c == shared ? d : c;
+        if (point_on_segment(
+                sites,
+                orientation,
+                first_other,
+                shared,
+                second_other) ||
+            point_on_segment(
+                sites,
+                orientation,
+                second_other,
+                shared,
+                first_other)) {
+            throw std::invalid_argument(
+                "polygon ring has overlapping adjacent edges");
+        }
+        return false;
+    };
+
+    if (size >= kIndexedRingSize) {
+        const RingEdgeIndex index(sites, ring);
+        for (std::size_t i = 0; i < size; ++i) {
+            if (index.any_overlap(
+                    edge_bounds(sites, ring[i], ring[(i + 1) % size]),
+                    [&](std::size_t j) { return j > i && intersects(i, j); })) {
+                throw std::invalid_argument("polygon ring is not simple");
+            }
+        }
+    } else {
+        for (std::size_t i = 0; i < size; ++i) {
+            for (std::size_t j = i + 1; j < size; ++j) {
+                if (intersects(i, j)) {
+                    throw std::invalid_argument("polygon ring is not simple");
+                }
             }
         }
     }
@@ -167,6 +308,23 @@ bool rings_intersect_or_touch(
     const Orientation& orientation,
     const Ring& first,
     const Ring& second) {
+    if (std::max(first.size(), second.size()) >= kIndexedRingSize) {
+        const Ring& indexed = first.size() >= second.size() ? first : second;
+        const Ring& queried = first.size() >= second.size() ? second : first;
+        const RingEdgeIndex index(sites, indexed);
+        for (std::size_t i = 0; i < queried.size(); ++i) {
+            const SiteIndex a = queried[i];
+            const SiteIndex b = queried[(i + 1) % queried.size()];
+            if (index.any_overlap(edge_bounds(sites, a, b), [&](std::size_t j) {
+                    return segments_intersect_or_touch(
+                        sites, orientation, a, b,
+                        indexed[j], indexed[(j + 1) % indexed.size()]);
+                })) {
+                return true;
+            }
+        }
+        return false;
+    }
     for (std::size_t i = 0; i < first.size(); ++i) {
         for (std::size_t j = 0; j < second.size(); ++j) {
             if (segments_intersect_or_touch(

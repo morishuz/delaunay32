@@ -19,21 +19,19 @@ and its [interactive demo](https://morishuz.github.io/delaunay32-wasm/).
 
 ## Performance
 
-Approximate runtime for one million unconstrained points on the reference
-Apple M1 system, normalized to eight-thread Delaunay32. Lower is better:
+Measured runtime for one million unique, unconstrained integer points on an
+Apple M1 (8 cores, 16 GB RAM), with triangle-only output. Relative runtime is
+normalized to eight-thread Delaunay32. Lower is better:
 
-| Implementation | Threads | Relative runtime |
-|:--|--:|--:|
-| **Delaunay32** | **8** | **1.0×** |
-| **Delaunay32** | **1** | **~2.8×** |
-| [Fade2D](https://www.geom.at/products/fade2d/) 2.17.3 | automatic | ~4.5× |
-| [Fade2D](https://www.geom.at/products/fade2d/) 2.17.3 | 1 | ~6.0× |
-| [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp) | 1 | ~11× |
-| [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) 1.6 | 1 | ~11× |
-| [CDT](https://github.com/artem-ogre/CDT) 1.4.5 | 1 | ~20× |
-
-These rounded results come from separate Release-build runs and vary with
-machine and input distribution.
+| Implementation | Threads | Runtime | Relative to Delaunay32 (8 threads) |
+|:--|--:|--:|--:|
+| **Delaunay32** | **8** | **45.4 ms** | **1.0×** |
+| **Delaunay32** | **1** | **131.6 ms** | **2.9×** |
+| [Fade2D](https://www.geom.at/products/fade2d/) 2.17.3 | automatic | 235.2 ms | 5.2× |
+| [Fade2D](https://www.geom.at/products/fade2d/) 2.17.3 | 1 | 314.1 ms | 6.9× |
+| [delaunator-cpp](https://github.com/delfrrr/delaunator-cpp/tree/c1521f6e879881232dcddabd6c2ddb6187e8714b) (`c1521f6`) | 1 | 542.0 ms | 11.9× |
+| [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) 1.6 | 1 | 584.0 ms | 12.9× |
+| [CDT](https://github.com/artem-ogre/CDT) 1.4.5 | 1 | 988.7 ms | 21.8× |
 
 ## Features
 

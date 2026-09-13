@@ -178,12 +178,19 @@ private:
         HullEdges y;
     };
 
+    struct OuterBridges {
+        std::uint32_t first_outer = 0;
+        std::uint32_t last_outer = 0;
+    };
+
     struct EdgeRange {
         std::uint32_t first = 0;
         std::uint32_t last = 0;
     };
 
-    struct EdgeCursor {
+    // Parallel jobs update cursors independently. Separate adjacent cursors
+    // even on machines with 128-byte cache lines.
+    struct alignas(128) EdgeCursor {
         std::uint32_t next = 0;
         std::uint32_t end = 0;
         std::uint32_t range_first = 0;
@@ -277,20 +284,26 @@ private:
     inline HullEdges merge_hulls_inline(
         HullEdges left,
         HullEdges right,
-        EdgeCursor* cursor = nullptr);
+        EdgeCursor* cursor = nullptr,
+        OuterBridges* bridges = nullptr);
     template <
         bool WidePredicates,
         bool ParallelAllocation = false>
     HullEdges merge_hulls(
         HullEdges left,
         HullEdges right,
-        EdgeCursor* cursor = nullptr);
+        EdgeCursor* cursor = nullptr,
+        OuterBridges* bridges = nullptr);
+    template <
+        bool WidePredicates,
+        bool ParallelAllocation = false>
+    DirectionalHulls merge_directional_hulls(
+        const DirectionalHulls& left,
+        const DirectionalHulls& right,
+        bool horizontal,
+        EdgeCursor* cursor);
     DirectionalHulls scan_directional_hulls(
         std::uint32_t outer_seed) const;
-    template <bool Horizontal>
-    DirectionalHulls scan_merged_hulls(
-        std::uint32_t outer_seed,
-        HullEdges split_hull) const;
     static std::uint32_t morton_code(std::uint32_t x, std::uint32_t y);
     MortonSplit find_morton_split(std::size_t first, std::size_t last) const;
     std::size_t add_parallel_node(

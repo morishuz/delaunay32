@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
+
 #if defined(_MSC_VER)
 #define DELAUNAY32_ALWAYS_INLINE __forceinline
 #elif defined(__GNUC__) || defined(__clang__)
@@ -184,15 +185,8 @@ Triangulator::build_morton_range(
         build_morton_range<WidePredicates, ParallelAllocation>(
             middle, last, cursor);
     const bool horizontal = (split.split_bit & 1U) != 0;
-    const HullEdges merged =
-        merge_hulls<WidePredicates, ParallelAllocation>(
-            horizontal ? left.y : left.x,
-            horizontal ? right.y : right.x,
-            cursor);
-    if (horizontal) {
-        return scan_merged_hulls<true>(sym(merged.left_outer), merged);
-    }
-    return scan_merged_hulls<false>(sym(merged.left_outer), merged);
+    return merge_directional_hulls<WidePredicates, ParallelAllocation>(
+        left, right, horizontal, cursor);
 }
 
 template <
@@ -203,7 +197,8 @@ Triangulator::HullEdges
 Triangulator::merge_hulls_inline(
     HullEdges left,
     HullEdges right,
-    EdgeCursor* cursor) {
+    EdgeCursor* cursor,
+    OuterBridges* bridges) {
     std::uint32_t ldi = left.right_outer;
     std::uint32_t rdi = right.left_outer;
 
@@ -219,6 +214,9 @@ Triangulator::merge_hulls_inline(
 
     std::uint32_t base =
         connect<ParallelAllocation>(sym(rdi), ldi, cursor);
+    if (bridges != nullptr) {
+        bridges->first_outer = base;
+    }
     if (org(ldi) == org(left.left_outer)) {
         left.left_outer = sym(base);
     }
@@ -283,6 +281,9 @@ Triangulator::merge_hulls_inline(
                 sym(base), sym(lcand), cursor);
         }
     }
+    if (bridges != nullptr) {
+        bridges->last_outer = sym(base);
+    }
     return {left.left_outer, right.right_outer};
 }
 
@@ -293,12 +294,90 @@ Triangulator::HullEdges
 Triangulator::merge_hulls(
     HullEdges left,
     HullEdges right,
-    EdgeCursor* cursor) {
+    EdgeCursor* cursor,
+    OuterBridges* bridges) {
     // Leaf recursion expands the body through merge_hulls_inline(). Keeping
     // this wrapper out of other callers avoids duplicating the large kernel
     // throughout the Morton and parallel merge machinery.
     return merge_hulls_inline<WidePredicates, ParallelAllocation>(
-        left, right, cursor);
+        left, right, cursor, bridges);
+}
+
+template <
+    bool WidePredicates,
+    bool ParallelAllocation>
+Triangulator::DirectionalHulls
+Triangulator::merge_directional_hulls(
+    const DirectionalHulls& left,
+    const DirectionalHulls& right,
+    bool horizontal,
+    EdgeCursor* cursor) {
+    // Extreme vertices of the union are extreme vertices of a child. Cache
+    // their indices before merging, because discarded darts lose their origins.
+    const HullEdges& a = horizontal ? left.x : left.y;
+    const HullEdges& b = horizontal ? right.x : right.y;
+    std::uint32_t left_vertex = org(a.left_outer);
+    std::uint32_t right_vertex = org(a.right_outer);
+    const std::uint32_t b_left_vertex = org(b.left_outer);
+    const std::uint32_t b_right_vertex = org(b.right_outer);
+    const Site& a_left = points_[left_vertex];
+    const Site& a_right = points_[right_vertex];
+    const Site& b_left = points_[b_left_vertex];
+    const Site& b_right = points_[b_right_vertex];
+    HullEdges perpendicular = a;
+    if (horizontal) {
+        if (b_left.x < a_left.x ||
+            (b_left.x == a_left.x && b_left.y < a_left.y)) {
+            perpendicular.left_outer = b.left_outer;
+            left_vertex = b_left_vertex;
+        }
+        if (b_right.x > a_right.x ||
+            (b_right.x == a_right.x && b_right.y < a_right.y)) {
+            perpendicular.right_outer = b.right_outer;
+            right_vertex = b_right_vertex;
+        }
+    } else {
+        if (b_left.y < a_left.y ||
+            (b_left.y == a_left.y && b_left.x > a_left.x)) {
+            perpendicular.left_outer = b.left_outer;
+            left_vertex = b_left_vertex;
+        }
+        if (b_right.y > a_right.y ||
+            (b_right.y == a_right.y && b_right.x > a_right.x)) {
+            perpendicular.right_outer = b.right_outer;
+            right_vertex = b_right_vertex;
+        }
+    }
+
+    OuterBridges bridges;
+    const HullEdges merged =
+        merge_hulls<WidePredicates, ParallelAllocation>(
+            horizontal ? left.y : left.x,
+            horizontal ? right.y : right.x,
+            cursor,
+            &bridges);
+    // The merged boundary consists of retained child chains and these two
+    // bridges. Only a bridge can replace an extreme vertex's boundary dart.
+    const auto correct = [&](std::uint32_t bridge) {
+        if (dest(bridge) == left_vertex) {
+            perpendicular.left_outer = sym(bridge);
+        }
+        if (org(bridge) == right_vertex) {
+            perpendicular.right_outer = bridge;
+        }
+    };
+    correct(bridges.first_outer);
+    correct(bridges.last_outer);
+
+    DirectionalHulls result;
+    if (horizontal) {
+        result.x = perpendicular;
+        result.y = merged;
+    } else {
+        result.x = merged;
+        result.y = perpendicular;
+    }
+    return result;
 }
 
 std::size_t Triangulator::add_parallel_node(
@@ -451,17 +530,9 @@ Triangulator::build_parallel(
                         nodes[node.right].hull;
                     const bool horizontal =
                         (node.split_bit & 1U) != 0;
-                    const HullEdges merged =
-                        merge_hulls<WidePredicates, true>(
-                            horizontal ? left.y : left.x,
-                            horizontal ? right.y : right.x,
-                            &cursor);
                     node.hull =
-                        horizontal
-                            ? scan_merged_hulls<true>(
-                                  sym(merged.left_outer), merged)
-                            : scan_merged_hulls<false>(
-                                  sym(merged.left_outer), merged);
+                        merge_directional_hulls<WidePredicates, true>(
+                            left, right, horizontal, &cursor);
                     finish_edge_cursor(cursor);
                 }
                 if (!barrier.wait()) {
@@ -556,72 +627,6 @@ Triangulator::scan_directional_hulls(
             result.y.right_outer = outer;
         }
 
-        outer = lnext(outer);
-    } while (outer != outer_seed);
-    return result;
-}
-
-template <bool Horizontal>
-Triangulator::DirectionalHulls
-Triangulator::scan_merged_hulls(
-    std::uint32_t outer_seed,
-    HullEdges split_hull) const {
-    DirectionalHulls result;
-    if constexpr (Horizontal) {
-        result.y = split_hull;
-    } else {
-        result.x = split_hull;
-    }
-
-    bool have_left = false;
-    bool have_right = false;
-    std::int32_t left_primary = 0;
-    std::int32_t left_secondary = 0;
-    std::int32_t right_primary = 0;
-    std::int32_t right_secondary = 0;
-    std::uint32_t outer = outer_seed;
-    do {
-        const Site& origin = points_[org(outer)];
-        const Site& destination = points_[dest(outer)];
-        if constexpr (Horizontal) {
-            if (!have_left ||
-                destination.x < left_primary ||
-                (destination.x == left_primary &&
-                 destination.y < left_secondary)) {
-                have_left = true;
-                left_primary = destination.x;
-                left_secondary = destination.y;
-                result.x.left_outer = sym(outer);
-            }
-            if (!have_right ||
-                origin.x > right_primary ||
-                (origin.x == right_primary &&
-                 origin.y < right_secondary)) {
-                have_right = true;
-                right_primary = origin.x;
-                right_secondary = origin.y;
-                result.x.right_outer = outer;
-            }
-        } else {
-            if (!have_left ||
-                destination.y < left_primary ||
-                (destination.y == left_primary &&
-                 destination.x > left_secondary)) {
-                have_left = true;
-                left_primary = destination.y;
-                left_secondary = destination.x;
-                result.y.left_outer = sym(outer);
-            }
-            if (!have_right ||
-                origin.y > right_primary ||
-                (origin.y == right_primary &&
-                 origin.x > right_secondary)) {
-                have_right = true;
-                right_primary = origin.y;
-                right_secondary = origin.x;
-                result.y.right_outer = outer;
-            }
-        }
         outer = lnext(outer);
     } while (outer != outer_seed);
     return result;

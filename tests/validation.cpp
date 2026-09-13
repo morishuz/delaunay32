@@ -13,6 +13,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -491,6 +492,29 @@ void require_valid_constrained_mesh(
     }
 }
 
+void require_exported_adjacency(
+    const TriangulationResult& result,
+    const std::string& label) {
+    // Reconstruct adjacency independently of the internal dart map. This
+    // includes clipped boundaries and holes, whose opposite must be -1.
+    std::vector<std::int64_t> expected(result.triangles.size() * 3, -1);
+    std::unordered_map<std::uint64_t, std::size_t> first_edges;
+    for (std::size_t edge = 0; edge < expected.size(); ++edge) {
+        const Triangle& triangle = result.triangles[edge / 3];
+        const std::size_t local = edge % 3;
+        const std::uint64_t key = benchmark_support::edge_key(
+            triangle_vertex(triangle, local),
+            triangle_vertex(triangle, (local + 1) % 3));
+        const auto inserted = first_edges.emplace(key, edge);
+        if (!inserted.second) {
+            const std::size_t opposite = inserted.first->second;
+            expected[edge] = static_cast<std::int64_t>(opposite);
+            expected[opposite] = static_cast<std::int64_t>(edge);
+        }
+    }
+    require(result.halfedges == expected, label + ": incorrect halfedge adjacency");
+}
+
 void require_full_topology(
     const std::vector<Point>& points,
     const TriangulationResult& result,
@@ -598,6 +622,92 @@ std::pair<std::uint64_t, std::uint64_t> coordinate_spans(
     };
 }
 #endif
+
+void test_merged_hull_extrema() {
+    Triangulator triangulator;
+    const auto check = [&](const std::vector<Point>& source, bool collinear) {
+        for (unsigned order = 0; order < 3; ++order) {
+            std::vector<Point> points = source;
+            if (order == 1) {
+                std::reverse(points.begin(), points.end());
+            } else if (order == 2) {
+                std::mt19937 random(0x32a11cU);
+                std::shuffle(points.begin(), points.end(), random);
+            }
+            if (order != 0) {
+                // Small spans remain portable even without int128 predicates.
+                for (Point& point : points) {
+                    point.x += std::numeric_limits<std::int32_t>::max() - 4096;
+                    point.y += std::numeric_limits<std::int32_t>::min() + 4096;
+                }
+            }
+            for (const std::size_t threads : {std::size_t{1}, std::size_t{8}}) {
+                const std::string label = "merged hull extrema n=" +
+                    std::to_string(points.size()) + " order=" +
+                    std::to_string(order) + " threads=" + std::to_string(threads);
+                configure(triangulator, threads, ResultDetail::Full);
+                triangulator.set_points(points);
+                const TriangulationResult result = triangulator.triangulate();
+                if (points.size() >= 50000) {
+                    require(result.report.actual_thread_count == threads,
+                            label + ": expected execution path was not exercised");
+                }
+                if (collinear) {
+                    require(result.triangles.empty() && result.halfedges.empty(),
+                            label + ": collinear input produced faces");
+                    const auto endpoints = std::minmax_element(
+                        points.begin(), points.end(),
+                        [](const Point& a, const Point& b) {
+                            return a.x < b.x || (a.x == b.x && a.y < b.y);
+                        });
+                    std::vector<std::uint32_t> expected = {
+                        static_cast<std::uint32_t>(endpoints.first - points.begin()),
+                        static_cast<std::uint32_t>(endpoints.second - points.begin())};
+                    require(result.hull == expected, label + ": incorrect endpoints");
+                } else {
+                    require_valid_mesh(points, result.triangles, label.c_str());
+                    require_exported_adjacency(result, label);
+                    auto expected = benchmark_support::convex_hull_indices(points);
+                    std::rotate(expected.begin(),
+                                std::min_element(expected.begin(), expected.end()),
+                                expected.end());
+                    require(result.hull == expected, label + ": incorrect hull");
+                }
+                require(result.representatives.size() == points.size(),
+                        label + ": incorrect representative count");
+                for (std::size_t i = 0; i < points.size(); ++i) {
+                    require(result.representatives[i] == i,
+                            label + ": distinct point lost its representative");
+                }
+            }
+        }
+    };
+
+    // Separated rows/columns give tied extrema and collinear child hulls for
+    // each split axis; the square grid exercises the parallel merge levels.
+    for (const auto dimensions :
+         std::array<std::pair<std::int32_t, std::int32_t>, 3>{{
+             {17, 3}, {3, 17}, {256, 256}}}) {
+        std::vector<Point> points;
+        points.reserve(static_cast<std::size_t>(dimensions.first * dimensions.second));
+        for (std::int32_t y = 0; y < dimensions.second; ++y) {
+            for (std::int32_t x = 0; x < dimensions.first; ++x) {
+                points.push_back({x * (dimensions.first == 3 ? 1000 : 1),
+                                  y * (dimensions.second == 3 ? 1000 : 1)});
+            }
+        }
+        check(points, false);
+    }
+    // In fully collinear merges, the first and last tangent are one edge pair.
+    for (unsigned direction = 0; direction < 4; ++direction) {
+        std::vector<Point> points;
+        for (std::int32_t i = 0; i < 33; ++i) {
+            points.push_back({direction == 1 ? 0 : i,
+                              direction == 0 ? 0 : (direction == 3 ? -i : i)});
+        }
+        check(points, true);
+    }
+}
 
 void test_predicate_selection() {
     const auto expect =
@@ -1775,6 +1885,26 @@ void test_parallel_polygon() {
         "polygon serial and parallel triangle sets differ");
     require_valid_polygon_mesh(
         points, candidate, outer, holes, "parallel polygon grid");
+
+    // Alternate clipped and complete exports on the same arena so stale
+    // map entries cannot masquerade as neighbors across a removed face.
+    Triangulator ordinary;
+    configure(ordinary, 1);
+    const auto complete = triangulate_points(ordinary, points);
+    for (bool clipped : {true, false, true}) {
+        configure(parallel, 2, ResultDetail::Full);
+        parallel.set_points(points);
+        parallel.set_polygons(
+            clipped ? std::vector<PolygonDomain>{{outer, holes}}
+                    : std::vector<PolygonDomain>{});
+        const auto full = parallel.triangulate();
+        require(full.report.actual_thread_count == 2,
+                "full polygon export did not use parallel execution");
+        require(benchmark_support::meshes_equal(
+                    full.triangles, clipped ? expected : complete),
+                "full polygon export changed the triangle set");
+        require_exported_adjacency(full, "parallel polygon export reuse");
+    }
 }
 
 void test_invalid_polygons() {
@@ -2148,30 +2278,7 @@ void test_polygon_clipping_across_standalone_constraints() {
             }
 
             if (detail == ResultDetail::Full) {
-                // Reconstruct adjacency from exported triangles so clipped
-                // boundaries, including split ring edges, must resolve to -1.
-                std::vector<std::int64_t> expected_halfedges(
-                    result.triangles.size() * 3, -1);
-                std::unordered_map<std::uint64_t, std::size_t> first_edges;
-                for (std::size_t edge = 0; edge < expected_halfedges.size();
-                     ++edge) {
-                    const Triangle& triangle = result.triangles[edge / 3];
-                    const std::size_t local = edge % 3;
-                    const std::uint64_t key = benchmark_support::edge_key(
-                        triangle_vertex(triangle, local),
-                        triangle_vertex(triangle, (local + 1) % 3));
-                    const auto inserted = first_edges.emplace(key, edge);
-                    if (!inserted.second) {
-                        const std::size_t opposite = inserted.first->second;
-                        expected_halfedges[edge] =
-                            static_cast<std::int64_t>(opposite);
-                        expected_halfedges[opposite] =
-                            static_cast<std::int64_t>(edge);
-                    }
-                }
-                require(
-                    result.halfedges == expected_halfedges,
-                    label + ": clipped halfedge adjacency is incorrect");
+                require_exported_adjacency(result, label);
                 require(
                     result.hull == ordinary.hull &&
                         result.representatives == ordinary.representatives,
@@ -2218,6 +2325,83 @@ void test_polygon_clipping_across_standalone_constraints() {
     require(
         mesh_has_edge(disjoint.triangles, 0, 2),
         "polygon clipping removed a retained standalone constraint");
+}
+
+void test_large_polygon_validation() {
+    const auto square = [](std::vector<Point>& points, std::int32_t x,
+                           std::int32_t y, std::int32_t step,
+                           std::int32_t segments) {
+        std::vector<std::uint32_t> ring;
+        const std::int32_t side = step * segments;
+        const auto append = [&](std::int32_t px, std::int32_t py) {
+            ring.push_back(static_cast<std::uint32_t>(points.size()));
+            points.push_back({px, py});
+        };
+        for (std::int32_t i = 0; i < segments; ++i) {
+            append(x + i * step, y);
+        }
+        for (std::int32_t i = 0; i < segments; ++i) {
+            append(x + side, y + i * step);
+        }
+        for (std::int32_t i = 0; i < segments; ++i) {
+            append(x + side - i * step, y + side);
+        }
+        for (std::int32_t i = 0; i < segments; ++i) {
+            append(x, y + side - i * step);
+        }
+        return ring;
+    };
+    const auto reject = [](const std::vector<Point>& points,
+                           const std::vector<PolygonDomain>& domains,
+                           const char* label) {
+        Triangulator triangulator;
+        triangulator.set_points(points);
+        triangulator.set_polygons(domains);
+        require_invalid([&] { triangulator.triangulate(); }, label);
+    };
+
+    // Exercise both sides of the index threshold, deeper trees, both winding
+    // directions, collinear boundary chains, and centers beyond int32 range.
+    for (std::int32_t segments : {15, 16, 17, 64}) {
+        std::vector<Point> points;
+        const std::int32_t origin =
+            std::numeric_limits<std::int32_t>::max() - 1024;
+        auto ring = square(points, origin, origin, 4, segments);
+        for (unsigned winding = 0; winding < 2; ++winding) {
+            Triangulator triangulator;
+            const auto triangles =
+                triangulate_polygon(triangulator, points, ring);
+            require_valid_polygon_mesh(
+                points, triangles, ring, {}, "subdivided large polygon");
+            std::reverse(ring.begin(), ring.end());
+        }
+        auto crossing = ring;
+        std::swap(crossing[ring.size() / 4], crossing[3 * ring.size() / 4]);
+        reject(points, {{crossing, {}}}, "large self-crossing ring");
+        auto backtrack = ring;
+        std::swap(backtrack[1], backtrack[2]);
+        reject(points, {{backtrack, {}}}, "large adjacent edge overlap");
+        auto touching_points = points;
+        touching_points[ring.size() / 2 + 1] = {origin + 2, origin};
+        reject(touching_points, {{ring, {}}}, "large nonadjacent edge contact");
+    }
+
+    std::vector<Point> points;
+    const auto outer = square(points, -256, -256, 16, 32);
+    const auto hole = square(points, -128, -128, 4, 16);
+    Triangulator triangulator;
+    const auto triangles =
+        triangulate_polygon(triangulator, points, outer, {hole});
+    require_valid_polygon_mesh(
+        points, triangles, outer, {hole}, "large polygon with indexed hole");
+    reject(points, {{outer, {}}, {hole, {}}}, "large nested outer domains");
+
+    const auto overlapping = square(points, -96, -96, 4, 16);
+    reject(points, {{outer, {hole, overlapping}}}, "large intersecting holes");
+    const auto touching = square(points, -256, 0, 4, 16);
+    reject(points, {{outer, {touching}}}, "large hole touching outer boundary");
+    const auto crossing = square(points, 224, 0, 4, 16);
+    reject(points, {{outer, {crossing}}}, "large hole crossing outer boundary");
 }
 
 void test_invalid_batched_domains() {
@@ -2376,6 +2560,7 @@ int main() {
         delaunay32::test_mesh_validator_rejects_incomplete_mesh();
         delaunay32::test_predicate_selection();
         delaunay32::test_deterministic_cases();
+        delaunay32::test_merged_hull_extrema();
         delaunay32::test_full_integer_result();
         delaunay32::test_explicit_quantization();
         delaunay32::test_quantization_options();
@@ -2408,6 +2593,7 @@ int main() {
         delaunay32::test_geometry_setter_replacement_and_clearing();
         delaunay32::test_batched_polygon_domains();
         delaunay32::test_polygon_clipping_across_standalone_constraints();
+        delaunay32::test_large_polygon_validation();
         delaunay32::test_invalid_batched_domains();
         delaunay32::test_invalid_inputs();
         std::cout

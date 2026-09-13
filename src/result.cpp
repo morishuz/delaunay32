@@ -41,15 +41,9 @@ void Triangulator::prepare_full_export() {
         outer = next;
     } while (outer != outer_seed_);
 
-    // Once the outer face has been marked, face traversal uses edge_prev_.
-    // Reset the complete dense map so clipped/excluded opposite darts resolve
-    // to -1 just like convex-hull opposites.
-    for (const EdgeRange range : edge_ranges_) {
-        std::fill(
-            edge_next_.begin() + range.first,
-            edge_next_.begin() + range.last,
-            kDeletedEdge);
-    }
+    // Every retained face will populate its map entries. Outer and clipped
+    // faces already carry kVisitedBit, so opposite-edge resolution can reject
+    // those darts directly without clearing the complete map first.
 }
 
 void Triangulator::export_hull() {
@@ -118,11 +112,11 @@ void Triangulator::export_full_result() {
                 continue;
             }
             const std::uint32_t flat_edge = edge_next_[dart];
-            const std::uint32_t opposite = edge_next_[sym(dart)];
+            const std::uint32_t opposite = sym(dart);
             halfedges_out_[flat_edge] =
-                opposite == kDeletedEdge
+                (edge_origin_[opposite] & kVisitedBit) != 0
                     ? -1
-                    : static_cast<std::int64_t>(opposite);
+                    : static_cast<std::int64_t>(edge_next_[opposite]);
         }
     }
     export_hull();
@@ -229,11 +223,11 @@ void Triangulator::export_full_result_parallel(
                         continue;
                     }
                     const std::uint32_t flat_edge = edge_next_[dart];
-                    const std::uint32_t opposite = edge_next_[sym(dart)];
+                    const std::uint32_t opposite = sym(dart);
                     halfedges_out_[flat_edge] =
-                        opposite == kDeletedEdge
+                        (edge_origin_[opposite] & kVisitedBit) != 0
                             ? -1
-                            : static_cast<std::int64_t>(opposite);
+                            : static_cast<std::int64_t>(edge_next_[opposite]);
                 }
             }
         } catch (...) {

@@ -18,6 +18,14 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ### Changed
 
+- Morton hull merges reuse child extrema and new boundary bridges instead of
+  rescanning merged hulls.
+- Parallel edge-allocation cursors are separated to reduce cache-line sharing
+  between workers.
+- Polygon validation rejects disjoint edge bounds before exact intersection
+  tests and uses a balanced spatial index for rings with at least 64 edges.
+- Full-result export uses existing face-exclusion flags to resolve boundary
+  halfedges without first clearing the complete dart-to-output map.
 - Serial Morton ordering now builds digit histograms in one scan and uses up
   to three 11/11/10-bit radix passes for wider keys, retaining smaller 10-bit
   tables for keys below 2^20 and reusing the existing scratch buffers.
