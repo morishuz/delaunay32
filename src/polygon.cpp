@@ -331,28 +331,51 @@ std::uint32_t Triangulator::first_boundary_edge(
 
 void Triangulator::mark_polygon_excluded_faces(
     const std::vector<Rings>& domains) {
-    std::vector<std::uint8_t> excluded(edge_constrained_.size(), 0);
+    constexpr std::uint8_t kBoundaryBit = 1;
+    constexpr std::uint8_t kExcludedBit = 2;
+    std::vector<std::uint8_t> marks(edge_constrained_.size(), 0);
+
+    // Standalone constraints protect edges during recovery and legalization,
+    // but only polygon boundaries stop the exclusion flood. Mark every dart
+    // in each recovered boundary chain, including unlisted collinear sites.
+    for (const Rings& rings : domains) {
+        for (const Ring& ring : rings) {
+            for (std::size_t i = 0; i < ring.size(); ++i) {
+                std::uint32_t origin = ring[i];
+                const std::uint32_t destination =
+                    ring[(i + 1) % ring.size()];
+                while (origin != destination) {
+                    const std::uint32_t edge =
+                        first_boundary_edge(origin, destination);
+                    marks[edge] |= kBoundaryBit;
+                    marks[sym(edge)] |= kBoundaryBit;
+                    origin = dest(edge);
+                }
+            }
+        }
+    }
 
     const auto exclude_component = [&](std::uint32_t initial_seed) {
         std::deque<std::uint32_t> pending = {initial_seed};
         while (!pending.empty()) {
             const std::uint32_t seed = pending.front();
             pending.pop_front();
-            if (seed >= excluded.size() || excluded[seed] != 0) {
+            if (seed >= marks.size() ||
+                (marks[seed] & kExcludedBit) != 0) {
                 continue;
             }
 
             std::uint32_t edge = seed;
             std::size_t face_size = 0;
             do {
-                if (edge >= excluded.size() || !is_live_edge(edge)) {
+                if (edge >= marks.size() || !is_live_edge(edge)) {
                     throw std::logic_error(
                         "polygon face flood reached invalid topology");
                 }
-                excluded[edge] = 1;
+                marks[edge] |= kExcludedBit;
                 edge = lnext(edge);
                 ++face_size;
-                if (face_size > excluded.size()) {
+                if (face_size > marks.size()) {
                     throw std::logic_error(
                         "polygon face flood did not close a face");
                 }
@@ -361,8 +384,8 @@ void Triangulator::mark_polygon_excluded_faces(
             edge = seed;
             do {
                 const std::uint32_t neighbor = sym(edge);
-                if (!is_constrained(edge) &&
-                    excluded[neighbor] == 0) {
+                if ((marks[edge] & kBoundaryBit) == 0 &&
+                    (marks[neighbor] & kExcludedBit) == 0) {
                     pending.push_back(neighbor);
                 }
                 edge = lnext(edge);
@@ -384,7 +407,7 @@ void Triangulator::mark_polygon_excluded_faces(
         for (std::uint32_t edge = range.first;
              edge < range.last;
              ++edge) {
-            if (excluded[edge] != 0) {
+            if ((marks[edge] & kExcludedBit) != 0) {
                 edge_origin_[edge] |= kVisitedBit;
             }
         }

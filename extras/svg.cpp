@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <optional>
 #include <ostream>
 #include <sstream>
@@ -835,6 +836,7 @@ Svg& Svg::draw_text(
 }
 
 void Svg::write_svg(std::ostream& output) const {
+    output.imbue(std::locale::classic());
     const SvgTransform transform =
         impl_->auto_fit
             ? auto_fit_transform(

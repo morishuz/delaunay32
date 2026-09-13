@@ -13,6 +13,8 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +25,27 @@ using delaunay32::Point;
 using delaunay32::Triangle;
 using delaunay32::extras::Geometry;
 using delaunay32::PolygonDomain;
+
+class GroupedCommaPunctuation : public std::numpunct<char> {
+protected:
+    char do_decimal_point() const override { return ','; }
+    char do_thousands_sep() const override { return '.'; }
+    std::string do_grouping() const override { return "\3"; }
+};
+
+class ScopedGlobalLocale {
+public:
+    explicit ScopedGlobalLocale(const std::locale& locale)
+        : previous_(std::locale::global(locale)) {}
+
+    ~ScopedGlobalLocale() { std::locale::global(previous_); }
+
+    ScopedGlobalLocale(const ScopedGlobalLocale&) = delete;
+    ScopedGlobalLocale& operator=(const ScopedGlobalLocale&) = delete;
+
+private:
+    std::locale previous_;
+};
 
 void expect(bool condition, const char* message) {
     if (!condition) {
@@ -323,6 +346,12 @@ void validate_json_round_trip(
     expect(
         restored.points.size() == geometry.points.size(),
         "JSON changed point count");
+    for (std::size_t i = 0; i < geometry.points.size(); ++i) {
+        expect(
+            restored.points[i].x == geometry.points[i].x &&
+                restored.points[i].y == geometry.points[i].y,
+            "JSON changed point coordinates");
+    }
     expect(
         restored.constraints.size() == geometry.constraints.size(),
         "JSON changed constraint count");
@@ -344,6 +373,92 @@ void validate_json_round_trip(
             restored_multi.polygons[0].holes ==
                 multi_domain.polygons[0].holes,
         "JSON changed multiple polygon domains");
+}
+
+void validate_serialization_locale(
+    const std::string& json_path,
+    const std::string& svg_path) {
+    Geometry geometry;
+    geometry.points = {
+        {1234567, -2345678},
+        {std::numeric_limits<std::int32_t>::max(),
+         std::numeric_limits<std::int32_t>::min()},
+        {0, 1},
+    };
+    geometry.constraints = {{0, 2}};
+    geometry.polygon = PolygonDomain{{0, 1, 2}, {}};
+
+    delaunay32::extras::Svg svg(1234.5, 678.25);
+    svg.set_transform(1.0, 1.0);
+    svg.draw_point(1000.25, 234.5);
+    svg.draw_line(12.5, 23.75, 456.25, 567.5);
+
+    const std::locale original;
+    std::string classic_json;
+    std::string classic_svg;
+    {
+        const ScopedGlobalLocale classic(std::locale::classic());
+        classic_json = delaunay32::extras::geometry_to_json(geometry);
+        classic_svg = svg.to_svg();
+    }
+    {
+        const std::locale grouped_comma(
+            std::locale::classic(), new GroupedCommaPunctuation);
+        const ScopedGlobalLocale changed(grouped_comma);
+        std::ostringstream localized;
+        localized << 1234567 << ' ' << 1.25;
+        expect(
+            localized.str() == "1.234.567 1,25",
+            "test numeric locale did not apply grouping and decimal comma");
+
+        const std::string encoded =
+            delaunay32::extras::geometry_to_json(geometry);
+        expect(
+            encoded == classic_json &&
+                encoded.find("[1234567, -2345678]") != std::string::npos,
+            "JSON string serialization depends on the global numeric locale");
+        {
+            std::ofstream output(json_path, std::ios::binary);
+            output << encoded;
+            expect(static_cast<bool>(output), "could not write JSON string");
+        }
+        const Geometry decoded_string =
+            delaunay32::extras::read_geometry_json(json_path);
+        expect(
+            decoded_string.points.size() == geometry.points.size(),
+            "localized JSON string changed point count");
+        for (std::size_t i = 0; i < geometry.points.size(); ++i) {
+            expect(
+                decoded_string.points[i].x == geometry.points[i].x &&
+                    decoded_string.points[i].y == geometry.points[i].y,
+                "localized JSON string failed to round-trip coordinates");
+        }
+        validate_json_round_trip(json_path, geometry);
+
+        const std::string generated = svg.to_svg();
+        expect(
+            generated == classic_svg &&
+                generated.find("width=\"1234.500\" height=\"678.250\"") !=
+                    std::string::npos &&
+                generated.find("cx=\"1000.250\" cy=\"234.500\"") !=
+                    std::string::npos,
+            "SVG string serialization depends on the global numeric locale");
+        svg.render_to_svg(svg_path);
+        std::ifstream input(svg_path, std::ios::binary);
+        const std::string written{
+            std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>(),
+        };
+        expect(
+            written == classic_svg,
+            "SVG file serialization depends on the global numeric locale");
+        expect(
+            std::locale() == grouped_comma,
+            "serialization changed the caller's global locale");
+    }
+    expect(
+        std::locale() == original,
+        "serialization locale test did not restore the original locale");
 }
 
 void validate_polygon_sampling(
@@ -627,6 +742,7 @@ int main(int argc, char** argv) {
             throw std::invalid_argument(
                 "expected JSON, mesh SVG, and polygon SVG output paths");
         }
+        validate_serialization_locale(argv[1], argv[2]);
         validate_sampling();
         validate_extreme_domain_query();
         Geometry geometry = make_geometry();

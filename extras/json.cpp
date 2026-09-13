@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <locale>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
@@ -467,6 +468,7 @@ void write_domain(
 }
 
 void write_geometry(std::ostream& output, const Geometry& geometry) {
+    output.imbue(std::locale::classic());
     output << "{\n  \"points\": [";
     for (std::size_t i = 0; i < geometry.points.size(); ++i) {
         const Point& point = geometry.points[i];

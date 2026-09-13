@@ -216,9 +216,20 @@ if(DELAUNAY32_BUILD_TESTS)
     add_test(NAME stress_validation COMMAND delaunay_stress_tests)
     set_tests_properties(stress_validation PROPERTIES TIMEOUT 300)
 
+    add_executable(delaunay_arena_recovery_tests tests/arena_recovery.cpp)
+    target_include_directories(
+        delaunay_arena_recovery_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+    target_link_libraries(
+        delaunay_arena_recovery_tests PRIVATE delaunay32::delaunay32)
+    delaunay32_enable_warnings(delaunay_arena_recovery_tests)
+    add_test(NAME arena_allocation_recovery COMMAND delaunay_arena_recovery_tests)
+
     # Compile a private variant that deterministically exhausts the fixed
     # parallel edge arena. This verifies the serial recovery path without
     # exposing test controls in the public API or relying on pathological data.
+    # The final block deliberately contains one dart, short of a complete edge.
+    set(DELAUNAY32_TEST_ARENA_DART_LIMIT 262145)
     add_library(
         delaunay32_limited_parallel_arena STATIC
         ${DELAUNAY32_LIBRARY_SOURCES})
@@ -231,7 +242,8 @@ if(DELAUNAY32_BUILD_TESTS)
         delaunay32_limited_parallel_arena PUBLIC Threads::Threads)
     target_compile_definitions(
         delaunay32_limited_parallel_arena
-        PRIVATE DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT=262144)
+        PRIVATE
+            DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT=${DELAUNAY32_TEST_ARENA_DART_LIMIT})
     delaunay32_enable_warnings(delaunay32_limited_parallel_arena)
 
     add_executable(
@@ -248,6 +260,23 @@ if(DELAUNAY32_BUILD_TESTS)
         NAME parallel_arena_fallback
         COMMAND delaunay_parallel_fallback_tests)
     set_tests_properties(parallel_arena_fallback PROPERTIES TIMEOUT 300)
+
+    add_executable(
+        delaunay_arena_growth_recovery_tests tests/arena_recovery.cpp)
+    target_include_directories(
+        delaunay_arena_growth_recovery_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+    target_link_libraries(
+        delaunay_arena_growth_recovery_tests
+        PRIVATE delaunay32_limited_parallel_arena)
+    target_compile_definitions(
+        delaunay_arena_growth_recovery_tests
+        PRIVATE
+            DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT=${DELAUNAY32_TEST_ARENA_DART_LIMIT})
+    delaunay32_enable_warnings(delaunay_arena_growth_recovery_tests)
+    add_test(
+        NAME arena_growth_recovery COMMAND delaunay_arena_growth_recovery_tests)
+    set_tests_properties(arena_growth_recovery PROPERTIES TIMEOUT 300)
 
 endif()
 

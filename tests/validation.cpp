@@ -1056,6 +1056,98 @@ void test_duplicates() {
         "duplicate compaction changed the triangle set or representatives");
 }
 
+void test_morton_key_ranges_and_reuse() {
+    struct RangeCase {
+        Point extreme;
+        const char* label;
+    };
+    // With a minimum coordinate of (0, 0), these extrema reach the
+    // radix-pass and digit-width boundaries exactly, without duplicating
+    // Morton encoding in the test. Alternate large and small ranges to
+    // exercise retained scratch buffers and both result-buffer parities.
+    const std::array<RangeCase, 10> cases = {{
+        {{0, 65535}, "full-width Morton key"},
+        {{31, 31}, "Morton key 2^10 - 1"},
+        {{1024, 0}, "Morton key 2^20"},
+        {{32, 0}, "Morton key 2^10"},
+        {{63, 31}, "Morton key 2^11 - 1"},
+        {{2048, 0}, "Morton key 2^22"},
+        {{0, 32}, "Morton key 2^11"},
+        {{2047, 2047}, "Morton key 2^22 - 1"},
+        {{1023, 1023}, "Morton key 2^20 - 1"},
+        {{31, 31}, "repeated narrow Morton range"},
+    }};
+    Triangulator reused;
+    for (const RangeCase& test : cases) {
+        std::vector<Point> unique = {{0, 0}, test.extreme};
+        for (const Point& point : benchmark_support::generate_points(
+                 Dataset::Uniform, 96, 0x11a2210ULL, 24)) {
+            if (point.x != 0 || point.y != 0) {
+                unique.push_back(point);
+            }
+        }
+        Triangulator fresh;
+        const TriangulationResult reference =
+            triangulate_full(fresh, unique);
+        require_valid_mesh(unique, reference.triangles, test.label);
+
+        // Translation crosses zero on both axes while preserving the
+        // geometry, normalized Morton keys, and original input indices.
+        std::vector<Point> shifted = unique;
+        for (Point& point : shifted) {
+            point.x -= 13;
+            point.y -= 7;
+        }
+        const TriangulationResult translated =
+            triangulate_full(reused, shifted);
+        const std::string label = test.label;
+        require(
+            benchmark_support::meshes_equal(
+                reference.triangles, translated.triangles),
+            label + ": signed translation or instance reuse changed mesh");
+        require_full_topology(shifted, translated, label);
+
+        std::vector<Point> duplicated;
+        std::vector<std::uint32_t> first_indices;
+        std::vector<std::uint32_t> expected_representatives;
+        for (std::size_t i = 0; i < shifted.size(); ++i) {
+            first_indices.push_back(
+                static_cast<std::uint32_t>(duplicated.size()));
+            duplicated.push_back(shifted[i]);
+            expected_representatives.push_back(first_indices.back());
+            if (i % 3 == 0) {
+                duplicated.push_back(shifted[i / 2]);
+                expected_representatives.push_back(first_indices[i / 2]);
+            }
+        }
+        for (std::size_t i = shifted.size(); i > 0; --i) {
+            duplicated.push_back(shifted[i - 1]);
+            expected_representatives.push_back(first_indices[i - 1]);
+        }
+
+        std::vector<Triangle> expected = reference.triangles;
+        for (Triangle& triangle : expected) {
+            triangle.i0 = first_indices[triangle.i0];
+            triangle.i1 = first_indices[triangle.i1];
+            triangle.i2 = first_indices[triangle.i2];
+        }
+        const TriangulationResult result =
+            triangulate_full(reused, duplicated);
+        require(
+            benchmark_support::meshes_equal(expected, result.triangles),
+            label + ": duplicate compaction changed the mesh");
+        require(
+            result.representatives == expected_representatives,
+            label + ": duplicates did not retain their lowest input index");
+        require(
+            result.report.unique_points == unique.size() &&
+                result.report.collapsed_points ==
+                    duplicated.size() - unique.size(),
+            label + ": incorrect duplicate counts");
+        require_full_topology(duplicated, result, label);
+    }
+}
+
 void test_collinear_input() {
     Triangulator triangulator;
     const std::vector<Triangle> horizontal = triangulate_points(triangulator,
@@ -2010,6 +2102,124 @@ void test_batched_polygon_domains() {
         "clipped polygon boundaries have incorrect halfedge sentinels");
 }
 
+void test_polygon_clipping_across_standalone_constraints() {
+    const auto check = [](const std::vector<Point>& points,
+                          const std::vector<PolygonDomain>& domains,
+                          const std::vector<Constraint>& constraints,
+                          const std::string& label) {
+        Triangulator triangulator;
+        const TriangulationResult ordinary =
+            triangulate_full(triangulator, points);
+        TriangulationResult result;
+        for (const ResultDetail detail :
+             {ResultDetail::Triangles, ResultDetail::Full}) {
+            configure(triangulator, 1, detail);
+            triangulator.set_points(points);
+            triangulator.set_constraints(constraints);
+            triangulator.set_polygons(domains);
+            result = triangulator.triangulate();
+
+            std::vector<std::vector<Triangle>> domain_triangles(domains.size());
+            for (const Triangle triangle : result.triangles) {
+                std::size_t memberships = 0;
+                for (std::size_t i = 0; i < domains.size(); ++i) {
+                    bool inside = triangle_centroid_in_ring(
+                        points, triangle, domains[i].outer_ring);
+                    for (const auto& hole : domains[i].holes) {
+                        inside = inside &&
+                            !triangle_centroid_in_ring(points, triangle, hole);
+                    }
+                    if (inside) {
+                        domain_triangles[i].push_back(triangle);
+                        ++memberships;
+                    }
+                }
+                require(
+                    memberships == 1,
+                    label + ": retained a triangle outside the polygon union");
+            }
+            for (std::size_t i = 0; i < domains.size(); ++i) {
+                require_valid_polygon_mesh(
+                    points,
+                    domain_triangles[i],
+                    domains[i].outer_ring,
+                    domains[i].holes,
+                    label);
+            }
+
+            if (detail == ResultDetail::Full) {
+                // Reconstruct adjacency from exported triangles so clipped
+                // boundaries, including split ring edges, must resolve to -1.
+                std::vector<std::int64_t> expected_halfedges(
+                    result.triangles.size() * 3, -1);
+                std::unordered_map<std::uint64_t, std::size_t> first_edges;
+                for (std::size_t edge = 0; edge < expected_halfedges.size();
+                     ++edge) {
+                    const Triangle& triangle = result.triangles[edge / 3];
+                    const std::size_t local = edge % 3;
+                    const std::uint64_t key = benchmark_support::edge_key(
+                        triangle_vertex(triangle, local),
+                        triangle_vertex(triangle, (local + 1) % 3));
+                    const auto inserted = first_edges.emplace(key, edge);
+                    if (!inserted.second) {
+                        const std::size_t opposite = inserted.first->second;
+                        expected_halfedges[edge] =
+                            static_cast<std::int64_t>(opposite);
+                        expected_halfedges[opposite] =
+                            static_cast<std::int64_t>(edge);
+                    }
+                }
+                require(
+                    result.halfedges == expected_halfedges,
+                    label + ": clipped halfedge adjacency is incorrect");
+                require(
+                    result.hull == ordinary.hull &&
+                        result.representatives == ordinary.representatives,
+                    label + ": clipping changed input-set reports");
+            }
+        }
+        return result;
+    };
+
+    check(
+        {{0, 0}, {10, 0}, {10, 10}, {0, 10},
+         {20, 0}, {30, 0}, {30, 10}, {20, 10}},
+        {{{0, 1, 2, 3}, {}}},
+        {{4, 5}, {5, 6}, {6, 7}, {7, 4}},
+        "closed constraint loop outside a polygon");
+
+    check(
+        {{0, 0}, {40, 0}, {40, 40}, {0, 40},
+         {10, 10}, {30, 10}, {30, 30}, {10, 30},
+         {15, 15}, {25, 15}, {25, 25}, {15, 25}},
+        {{{0, 1, 2, 3}, {{4, 5, 6, 7}}}},
+        {{8, 9}, {9, 10}, {10, 11}, {11, 8}},
+        "closed constraint loop inside a polygon hole");
+
+    // The hole chord has boundary endpoints but no closed standalone loop.
+    // Outer and hole rings omit collinear sites, and standalone constraints
+    // overlap both whole ring segments and portions of their recovered chains.
+    check(
+        {{0, 0}, {40, 0}, {40, 40}, {0, 40},
+         {10, 10}, {30, 10}, {30, 30}, {10, 30},
+         {20, 10}, {30, 20}, {20, 30}, {10, 20},
+         {20, 0}, {40, 20}, {20, 40}, {0, 20}},
+        {{{3, 2, 1, 0}, {{7, 6, 5, 4}}}},
+        {{8, 10}, {0, 12}, {5, 4}},
+        "partitioned hole with split and overlapping boundary constraints");
+
+    const TriangulationResult disjoint = check(
+        {{0, 0}, {10, 0}, {10, 10}, {0, 10},
+         {20, 0}, {30, 0}, {30, 10}, {20, 10},
+         {-5, -5}, {35, -5}, {35, 15}, {-5, 15}},
+        {{{0, 1, 2, 3}, {}}, {{4, 5, 6, 7}, {}}},
+        {{8, 9}, {9, 10}, {10, 11}, {11, 8}, {0, 2}},
+        "constraint loop enclosing disjoint polygon domains");
+    require(
+        mesh_has_edge(disjoint.triangles, 0, 2),
+        "polygon clipping removed a retained standalone constraint");
+}
+
 void test_invalid_batched_domains() {
     const auto reject = [](const std::vector<Point>& points,
                            std::vector<PolygonDomain> domains,
@@ -2174,6 +2384,7 @@ int main() {
         delaunay32::test_quantized_parallel();
         delaunay32::test_quantized_collinear_input();
         delaunay32::test_duplicates();
+        delaunay32::test_morton_key_ranges_and_reuse();
         delaunay32::test_collinear_input();
         delaunay32::test_wide_predicates();
         delaunay32::test_single_constraint_recovery();
@@ -2196,6 +2407,7 @@ int main() {
         delaunay32::test_stateful_api_lifecycle();
         delaunay32::test_geometry_setter_replacement_and_clearing();
         delaunay32::test_batched_polygon_domains();
+        delaunay32::test_polygon_clipping_across_standalone_constraints();
         delaunay32::test_invalid_batched_domains();
         delaunay32::test_invalid_inputs();
         std::cout

@@ -49,9 +49,10 @@ void require_fallback_matches(
 
     // This executable links a private library variant with an arena large
     // enough to build substantial partial topology but too small to finish
-    // this input. A successful result therefore proves that the partial
-    // topology was discarded and the input was rebuilt through the growable
-    // serial allocator.
+    // this input. Its final block has only one dart; an edge needs two, so
+    // this also exercises rejection of a partial final block. A successful
+    // result proves that the partial topology was discarded and the input
+    // was rebuilt through the growable serial allocator.
     delaunay32::Triangulator parallel_with_fallback;
     configure(parallel_with_fallback, 2);
     const std::vector<Triangle> candidate =

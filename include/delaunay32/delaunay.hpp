@@ -303,6 +303,7 @@ private:
     DirectionalHulls build_parallel(
         std::size_t thread_count,
         detail::WorkerTeam& workers);
+    void resize_edge_arena(std::size_t dart_count);
     void acquire_edge_block(EdgeCursor& cursor);
     static void finish_edge_cursor(EdgeCursor& cursor);
 

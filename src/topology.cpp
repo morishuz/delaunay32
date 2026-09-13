@@ -627,6 +627,19 @@ Triangulator::scan_merged_hulls(
     return result;
 }
 
+void Triangulator::resize_edge_arena(std::size_t dart_count) {
+    // Reserve every backing allocation before changing any logical size.
+    // If allocation fails, all three sizes still agree, including when the
+    // caller starts a smaller problem after the failed run. Resizing uint32_t
+    // elements within reserved capacity cannot allocate or throw.
+    edge_origin_.reserve(dart_count);
+    edge_next_.reserve(dart_count);
+    edge_prev_.reserve(dart_count);
+    edge_origin_.resize(dart_count);
+    edge_next_.resize(dart_count);
+    edge_prev_.resize(dart_count);
+}
+
 void Triangulator::acquire_edge_block(EdgeCursor& cursor) {
     finish_edge_cursor(cursor);
     if (cursor.block_counter == nullptr) {
@@ -642,7 +655,7 @@ void Triangulator::acquire_edge_block(EdgeCursor& cursor) {
     const std::size_t first =
         cursor.block_counter->fetch_add(
             kEdgeBlockDarts, std::memory_order_relaxed);
-    if (first >= capacity_limit) {
+    if (first >= capacity_limit || capacity_limit - first < 2) {
         throw detail::ParallelEdgeArenaExhausted{};
     }
     const std::size_t last =
@@ -678,9 +691,7 @@ std::uint32_t Triangulator::make_edge(
         if (edge_count_ + 2 > edge_origin_.size()) {
             const std::size_t new_size =
                 std::max(edge_origin_.size() * 2, edge_count_ + 2);
-            edge_origin_.resize(new_size);
-            edge_next_.resize(new_size);
-            edge_prev_.resize(new_size);
+            resize_edge_arena(new_size);
         }
         edge = static_cast<std::uint32_t>(edge_count_);
         edge_count_ += 2;

@@ -3,6 +3,26 @@
 Notable changes to Delaunay32 are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Polygon clipping now crosses standalone constraints outside outer boundaries
+  and inside holes, while respecting every recovered polygon boundary segment.
+- Edge-arena allocation failures preserve consistent array sizes so the same
+  triangulator can safely be reset and retried.
+- Parallel edge allocation rejects a final block that cannot hold both darts
+  of an edge and uses the existing serial fallback.
+- JSON and SVG output use locale-independent numeric formatting for both
+  strings and files.
+
+### Changed
+
+- Serial Morton ordering now builds digit histograms in one scan and uses up
+  to three 11/11/10-bit radix passes for wider keys, retaining smaller 10-bit
+  tables for keys below 2^20 and reusing the existing scratch buffers.
+  The parallel sorter and C++17 requirement are unchanged.
+
 ## 0.6.2 - 2026-08-08
 
 ### Changed

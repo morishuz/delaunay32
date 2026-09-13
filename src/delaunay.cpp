@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -453,13 +454,19 @@ PredicateWidth Triangulator::build_loaded_topology(
         throw std::invalid_argument(
             "point count exceeds edge arena index range");
     }
-    const std::size_t edge_capacity =
+    std::size_t edge_capacity =
         point_count * kEdgeArenaDartsPerPoint;
+#if defined(DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT)
+    // Match the physical allocation to the private test limit so sanitizer
+    // runs also detect a write past a partially filled final edge block.
+    edge_capacity = std::min(
+        edge_capacity,
+        static_cast<std::size_t>(
+            DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT));
+#endif
     edge_capacity_limit_ = edge_capacity;
     if (edge_origin_.size() < edge_capacity) {
-        edge_origin_.resize(edge_capacity);
-        edge_next_.resize(edge_capacity);
-        edge_prev_.resize(edge_capacity);
+        resize_edge_arena(edge_capacity);
     }
     active_thread_count_ = effective_threads;
     DirectionalHulls hull;
@@ -586,81 +593,91 @@ void Triangulator::sort_points_morton(
         return;
     }
 
-    const auto scatter = [&](const std::vector<Site>& input_points,
-                             const std::vector<std::uint32_t>& input_keys,
-                             std::vector<Site>& output_points,
-                             std::vector<std::uint32_t>& output_keys,
-                             unsigned shift) {
-        sort_counts_.assign(kRadixSize, 0);
-        for (const std::uint32_t key : input_keys) {
-            ++sort_counts_[(key >> shift) & kRadixMask];
+    const auto sort_serial = [&](auto radix_bits) {
+        static constexpr unsigned kSerialRadixBits =
+            decltype(radix_bits)::value;
+        static constexpr std::uint32_t kSerialRadixSize =
+            1U << kSerialRadixBits;
+        static constexpr std::uint32_t kSerialRadixMask =
+            kSerialRadixSize - 1U;
+        static constexpr std::uint32_t kSerialLastRadixSize =
+            1U << (32U - 2U * kSerialRadixBits);
+
+        const unsigned serial_pass_count =
+            maximum_key <= kSerialRadixMask
+                ? 1U
+                : maximum_key < (1U << (2U * kSerialRadixBits)) ? 2U : 3U;
+        const std::size_t histogram_size =
+            serial_pass_count == 3
+                ? 2U * kSerialRadixSize + kSerialLastRadixSize
+                : serial_pass_count * kSerialRadixSize;
+        sort_counts_.assign(histogram_size, 0);
+
+        // Digit frequencies do not change when points are permuted. Count all
+        // active digits in one scan. Each stable scatter moves the point and
+        // its Morton key together.
+        if (serial_pass_count == 1) {
+            for (const std::uint32_t key : morton_keys_) {
+                ++sort_counts_[key & kSerialRadixMask];
+            }
+        } else if (serial_pass_count == 2) {
+            for (const std::uint32_t key : morton_keys_) {
+                ++sort_counts_[key & kSerialRadixMask];
+                ++sort_counts_[kSerialRadixSize +
+                               ((key >> kSerialRadixBits) & kSerialRadixMask)];
+            }
+        } else {
+            for (const std::uint32_t key : morton_keys_) {
+                ++sort_counts_[key & kSerialRadixMask];
+                ++sort_counts_[kSerialRadixSize +
+                               ((key >> kSerialRadixBits) & kSerialRadixMask)];
+                ++sort_counts_[2U * kSerialRadixSize +
+                               (key >> (2U * kSerialRadixBits))];
+            }
         }
-        std::uint32_t offset = 0;
-        for (std::uint32_t& count : sort_counts_) {
-            const std::uint32_t next = offset + count;
-            count = offset;
-            offset = next;
+
+        for (unsigned pass = 0; pass < serial_pass_count; ++pass) {
+            std::uint32_t* counts =
+                sort_counts_.data() + pass * kSerialRadixSize;
+            const std::uint32_t bucket_count =
+                pass == 2 ? kSerialLastRadixSize : kSerialRadixSize;
+            std::uint32_t offset = 0;
+            for (std::uint32_t bucket = 0; bucket < bucket_count; ++bucket) {
+                const std::uint32_t next = offset + counts[bucket];
+                counts[bucket] = offset;
+                offset = next;
+            }
+
+            const std::vector<Site>& input_points =
+                (pass & 1U) == 0 ? points_ : sort_scratch_;
+            const std::vector<std::uint32_t>& input_keys =
+                (pass & 1U) == 0 ? morton_keys_ : morton_scratch_;
+            std::vector<Site>& output_points =
+                (pass & 1U) == 0 ? sort_scratch_ : points_;
+            std::vector<std::uint32_t>& output_keys =
+                (pass & 1U) == 0 ? morton_scratch_ : morton_keys_;
+            const unsigned shift = pass * kSerialRadixBits;
+            for (std::size_t i = 0; i < input_points.size(); ++i) {
+                const std::uint32_t key = input_keys[i];
+                const std::uint32_t destination =
+                    counts[(key >> shift) & (bucket_count - 1U)]++;
+                output_points[destination] = input_points[i];
+                output_keys[destination] = key;
+            }
         }
-        for (std::size_t i = 0; i < input_points.size(); ++i) {
-            const std::uint32_t key = input_keys[i];
-            const std::uint32_t destination =
-                sort_counts_[(key >> shift) & kRadixMask]++;
-            output_points[destination] = input_points[i];
-            output_keys[destination] = key;
+        if ((serial_pass_count & 1U) != 0) {
+            points_.swap(sort_scratch_);
+            morton_keys_.swap(morton_scratch_);
         }
     };
 
-    sort_counts_.assign(kRadixSize, 0);
-    for (const std::uint32_t key : morton_keys_) {
-        ++sort_counts_[key & kRadixMask];
+    // Keep the smaller tables for keys that already fit in two 10-bit
+    // passes. Wider keys use at most three 11/11/10-bit passes.
+    if (maximum_key < (1U << (2U * kRadixBits))) {
+        sort_serial(std::integral_constant<unsigned, 10>{});
+    } else {
+        sort_serial(std::integral_constant<unsigned, 11>{});
     }
-    std::uint32_t offset = 0;
-    for (std::uint32_t& count : sort_counts_) {
-        const std::uint32_t next = offset + count;
-        count = offset;
-        offset = next;
-    }
-    for (std::size_t i = 0; i < points_.size(); ++i) {
-        const std::uint32_t key = morton_keys_[i];
-        const std::uint32_t destination =
-            sort_counts_[key & kRadixMask]++;
-        sort_scratch_[destination] = points_[i];
-        morton_scratch_[destination] = key;
-    }
-    if (maximum_key <= kRadixMask) {
-        points_.swap(sort_scratch_);
-        morton_keys_.swap(morton_scratch_);
-        return;
-    }
-
-    scatter(
-        sort_scratch_,
-        morton_scratch_,
-        points_,
-        morton_keys_,
-        kRadixBits);
-    if (maximum_key <= ((1U << (2U * kRadixBits)) - 1U)) {
-        return;
-    }
-
-    scatter(
-        points_,
-        morton_keys_,
-        sort_scratch_,
-        morton_scratch_,
-        2U * kRadixBits);
-    if (maximum_key <= ((1U << (3U * kRadixBits)) - 1U)) {
-        points_.swap(sort_scratch_);
-        morton_keys_.swap(morton_scratch_);
-        return;
-    }
-
-    scatter(
-        sort_scratch_,
-        morton_scratch_,
-        points_,
-        morton_keys_,
-        3U * kRadixBits);
 }
 
 std::uint32_t Triangulator::morton_code(
