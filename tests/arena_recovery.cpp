@@ -17,6 +17,8 @@ namespace {
 
 std::atomic<std::size_t> failure_bytes{0};
 std::atomic<unsigned> allocations_remaining{0};
+std::atomic<bool> record_allocation{false};
+std::atomic<std::size_t> recorded_bytes{0};
 
 bool fail_allocation(std::size_t bytes) noexcept {
     const std::size_t selected =
@@ -35,6 +37,25 @@ void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::size_t arena_allocation_bytes(std::size_t dart_count) {
+    // Measure the request made by this standard library: large vector
+    // allocations can include alignment padding (for example, on MSVC).
+    std::vector<std::uint32_t> probe;
+    recorded_bytes.store(0, std::memory_order_relaxed);
+    record_allocation.store(true, std::memory_order_relaxed);
+    try {
+        probe.reserve(dart_count);
+    } catch (...) {
+        record_allocation.store(false, std::memory_order_relaxed);
+        throw;
+    }
+    record_allocation.store(false, std::memory_order_relaxed);
+    const std::size_t bytes = recorded_bytes.load(std::memory_order_relaxed);
+    require(bytes >= dart_count * sizeof(std::uint32_t),
+            "could not measure the arena allocation size");
+    return bytes;
 }
 
 std::vector<delaunay32::Point> make_points(std::size_t count) {
@@ -113,6 +134,9 @@ void require_recovery(
 // setup allocations out of the failure sequence. No production test API is
 // needed, and every case verifies that the intended allocation actually failed.
 void* operator new(std::size_t bytes) {
+    if (record_allocation.load(std::memory_order_relaxed)) {
+        recorded_bytes.store(bytes, std::memory_order_relaxed);
+    }
     if (fail_allocation(bytes)) {
         throw std::bad_alloc();
     }
@@ -137,6 +161,7 @@ int main() {
         // so the matching allocation occurs in make_edge()'s serial growth.
         constexpr std::size_t limit =
             DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT;
+        const std::size_t growth_bytes = arena_allocation_bytes(limit * 2);
         const auto points = delaunay32::benchmark_support::generate_points(
             delaunay32::benchmark_support::Dataset::Uniform,
             60000,
@@ -152,7 +177,7 @@ int main() {
                         20000);
                 require_recovery(
                     points,
-                    limit * 2 * sizeof(std::uint32_t),
+                    growth_bytes,
                     failed,
                     retry,
                     false,
@@ -163,12 +188,14 @@ int main() {
         }
 #else
         const auto points = make_points(50);
+        const std::size_t initial_bytes =
+            arena_allocation_bytes(points.size() * 9);
         for (unsigned failed : {1U, 2U, 3U}) {
             for (bool warm : {false, true}) {
                 for (std::size_t retry_count : {17U, 50U, 120U}) {
                     require_recovery(
                         points,
-                        points.size() * 9 * sizeof(std::uint32_t),
+                        initial_bytes,
                         failed,
                         make_points(retry_count),
                         warm,
