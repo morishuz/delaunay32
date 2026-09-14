@@ -5,6 +5,47 @@ Notable changes to Delaunay32 are documented here. The project follows
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-14
+
+### Migration
+
+- Rebuild all consumers: `Triangulator` has a new binary layout. Public method
+  signatures remain unchanged. Versioned CMake consumers should request 0.7.
+- Seeded sampling remains reproducible within this release, but sparse
+  multi-domain sample sequences differ from earlier releases.
+
+### Added
+
+- Add `delaunay_workload_benchmark` for constraints, full results, SVG construction
+  and serialization, and rectangular/disconnected polygon sampling.
+
+### Changed
+
+- Sample sparse polygon unions through area-weighted domain bounds, correcting
+  for overlapping proposal boxes. Dense regions retain global rejection
+  sampling. Seeds remain deterministic, but sparse multi-domain sequences change.
+- Store SVG path coordinates contiguously with ring offsets, removing per-triangle
+  allocations while preserving serialized output.
+- Hide triangulation implementation details behind a private implementation,
+  with dedicated edge-arena storage/allocation and grouped constraint workspace.
+  Public method signatures are unchanged; consumers must rebuild because the
+  `Triangulator` binary layout changed.
+- Share SVG geometry construction and polygon query traversal between integer
+  and floating-point overloads, retaining their distinct arithmetic predicates.
+- Preserve the topology kernel's specialized merge loops and direct storage
+  access; moved-from triangulators can be configured for a new problem.
+
+### Fixed
+
+- Blue-noise sampling falls back to linear neighbor queries when tiny bounds
+  cannot support finite grid reciprocals, avoiding invalid integer conversions.
+- Automatic quantization rejects nonzero spans that require an infinite scale
+  instead of returning an invalid mapping and zero error report.
+- Jittered polygon sampling computes ring areas relative to a local origin,
+  preserving small domains translated to large coordinates.
+- Sampling rejects overflowing axis spans for bounds and polygon regions
+  before they can produce non-finite random coordinates.
+
 ## 0.6.3 - 2026-09-14
 
 ### Fixed

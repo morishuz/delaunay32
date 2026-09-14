@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunay32/delaunay.hpp"
+#include "triangulator_impl.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -365,14 +365,14 @@ bool point_in_ring(
 }  // namespace
 
 std::vector<std::vector<std::uint32_t>>
-Triangulator::prepare_polygon_rings(
+Triangulator::Impl::prepare_polygon_rings(
     const std::vector<std::uint32_t>& outer_ring,
     const std::vector<std::vector<std::uint32_t>>& holes) const {
     Rings rings;
     rings.reserve(holes.size() + 1);
-    rings.push_back(map_ring_indices(outer_ring, original_to_site_));
+    rings.push_back(map_ring_indices(outer_ring, constraints_.original_to_site));
     for (const std::vector<std::uint32_t>& hole : holes) {
-        rings.push_back(map_ring_indices(hole, original_to_site_));
+        rings.push_back(map_ring_indices(hole, constraints_.original_to_site));
     }
 
     const auto orientation = [&](SiteIndex a, SiteIndex b, SiteIndex c) {
@@ -433,10 +433,10 @@ Triangulator::prepare_polygon_rings(
 }
 
 std::vector<std::vector<std::vector<std::uint32_t>>>
-Triangulator::prepare_polygon_domains() const {
+Triangulator::Impl::prepare_polygon_domains() const {
     std::vector<Rings> domains;
-    domains.reserve(polygons_.size());
-    for (const PolygonDomain& polygon : polygons_) {
+    domains.reserve(constraints_.polygons.size());
+    for (const PolygonDomain& polygon : constraints_.polygons) {
         domains.push_back(prepare_polygon_rings(
             polygon.outer_ring, polygon.holes));
     }
@@ -473,7 +473,7 @@ Triangulator::prepare_polygon_domains() const {
     return domains;
 }
 
-std::uint32_t Triangulator::first_boundary_edge(
+std::uint32_t Triangulator::Impl::first_boundary_edge(
     std::uint32_t origin,
     std::uint32_t destination) const {
     std::uint32_t edge = find_edge(origin, destination);
@@ -487,11 +487,11 @@ std::uint32_t Triangulator::first_boundary_edge(
     return edge;
 }
 
-void Triangulator::mark_polygon_excluded_faces(
+void Triangulator::Impl::mark_polygon_excluded_faces(
     const std::vector<Rings>& domains) {
     constexpr std::uint8_t kBoundaryBit = 1;
     constexpr std::uint8_t kExcludedBit = 2;
-    std::vector<std::uint8_t> marks(edge_constrained_.size(), 0);
+    std::vector<std::uint8_t> marks(constraints_.edge_flags.size(), 0);
 
     // Standalone constraints protect edges during recovery and legalization,
     // but only polygon boundaries stop the exclusion flood. Mark every dart
@@ -561,12 +561,12 @@ void Triangulator::mark_polygon_excluded_faces(
         }
     }
 
-    for (const EdgeRange range : edge_ranges_) {
+    for (const EdgeRange range : arena_.ranges) {
         for (std::uint32_t edge = range.first;
              edge < range.last;
              ++edge) {
             if ((marks[edge] & kExcludedBit) != 0) {
-                edge_origin_[edge] |= kVisitedBit;
+                arena_.origin[edge] |= kVisitedBit;
             }
         }
     }

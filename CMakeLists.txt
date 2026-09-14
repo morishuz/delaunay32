@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(delaunay32 VERSION 0.6.3 LANGUAGES CXX)
+project(delaunay32 VERSION 0.7.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -57,6 +57,8 @@ set(DELAUNAY32_LIBRARY_SOURCES
     src/delaunay.cpp
     src/export.cpp
     src/internal.hpp
+    src/edge_arena.hpp
+    src/triangulator_impl.hpp
     src/polygon.cpp
     src/quantization.cpp
     src/result.cpp
@@ -148,6 +150,11 @@ if(DELAUNAY32_BUILD_BENCHMARKS)
         delaunay_benchmark
         PRIVATE delaunay32::delaunay32)
     delaunay32_enable_warnings(delaunay_benchmark)
+    if(DELAUNAY32_BUILD_EXTRAS)
+        add_executable(delaunay_workload_benchmark benchmarks/workloads.cpp)
+        target_link_libraries(delaunay_workload_benchmark PRIVATE delaunay32::extras)
+        delaunay32_enable_warnings(delaunay_workload_benchmark)
+    endif()
 endif()
 
 if(DELAUNAY32_BUILD_TESTS)

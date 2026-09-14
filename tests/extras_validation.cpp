@@ -6,6 +6,8 @@
 #include "delaunay32/extras/sampling.hpp"
 #include "delaunay32/extras/svg.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -96,6 +98,177 @@ std::size_t count_substring(
         position += substring.size();
     }
     return count;
+}
+
+void validate_geometry_and_svg_overloads() {
+    using delaunay32::FloatPoint;
+    using namespace delaunay32::extras;
+    const std::vector<Point> points = {
+        {0, 0}, {10, 0}, {10, 10}, {0, 10},
+        {3, 3}, {7, 3}, {7, 7}, {3, 7}};
+    std::vector<FloatPoint> floats;
+    for (const Point& point : points) {
+        floats.push_back({static_cast<double>(point.x),
+                          static_cast<double>(point.y)});
+    }
+    PolygonDomain domain{{0, 1, 2, 3, 0}, {{4, 5, 6, 7}}};
+    for (unsigned winding = 0; winding < 2; ++winding) {
+        for (std::int32_t x = -1; x <= 11; ++x) {
+            for (std::int32_t y = -1; y <= 11; ++y) {
+                const bool expected = x > 0 && x < 10 && y > 0 && y < 10 &&
+                    !(x >= 3 && x <= 7 && y >= 3 && y <= 7);
+                expect(point_is_strictly_inside_domain(
+                           Point{x, y}, domain, points) == expected,
+                       "integer domain query changed at a boundary or hole");
+                expect(point_is_strictly_inside_domain(
+                           FloatPoint{static_cast<double>(x),
+                                      static_cast<double>(y)},
+                           domain, floats) == expected,
+                       "floating domain query changed at a boundary or hole");
+            }
+        }
+        std::reverse(domain.outer_ring.begin(), domain.outer_ring.end());
+        std::reverse(domain.holes[0].begin(), domain.holes[0].end());
+    }
+
+    const std::vector<Triangle> triangles = {{0, 1, 2}, {0, 2, 3}};
+    const auto draw = [&](const auto& sites) {
+        Svg svg(200.0, 160.0);
+        svg.draw_points(sites)
+            .draw_polygon(sites, domain.outer_ring)
+            .draw_polygon(sites, domain)
+            .draw_triangles(sites, triangles);
+        const std::string expected = svg.to_svg();
+        svg.draw_triangles(sites, {});
+        expect(svg.to_svg() == expected, "empty triangles changed the SVG");
+        expect_invalid_argument(
+            [&] { svg.draw_triangles(sites, {{0, 1, 99}}); },
+            "SVG accepted an invalid triangle index");
+        expect_invalid_argument(
+            [&] { svg.draw_polygon(sites, std::vector<std::uint32_t>{0, 99, 2}); },
+            "SVG accepted an invalid ring index");
+        expect(svg.to_svg() == expected, "invalid geometry partially changed SVG");
+        return expected;
+    };
+    expect(draw(points) == draw(floats),
+           "integer and floating SVG overloads produced different documents");
+}
+
+void validate_disconnected_sampling() {
+    using delaunay32::FloatPoint;
+    using namespace delaunay32::extras;
+    PointSampler sampler;
+    const std::vector<FloatPoint> points = {
+        {0, 0}, {1, 0}, {1, 1}, {0, 1},
+        {1e6, 0}, {1e6 + 2, 0}, {1e6 + 2, 2}, {1e6, 2},
+        {1e6 + 0.5, 0.5}, {1e6 + 1.5, 0.5},
+        {1e6 + 1.5, 1.5}, {1e6 + 0.5, 1.5}};
+    const std::vector<PolygonDomain> domains = {
+        {{0, 1, 2, 3}, {}}, {{4, 5, 6, 7}, {{8, 9, 10, 11}}}};
+    sampler.set_polygon_interiors(points, domains);
+    UniformSamplingOptions options;
+    options.point_count = 12000;
+    options.attempts_per_point = 100;
+    const auto samples = sampler.generate_uniform(options);
+    const auto repeated = sampler.generate_uniform(options);
+    std::size_t small_count = 0;
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const FloatPoint& point = samples[i];
+        const bool small = point_is_strictly_inside_domain(point, domains[0], points);
+        expect(small || point_is_strictly_inside_domain(point, domains[1], points),
+               "disconnected sampler returned a boundary, hole, or gap point");
+        small_count += small ? 1U : 0U;
+        expect(point.x == repeated[i].x && point.y == repeated[i].y,
+               "disconnected sampling is not deterministic");
+    }
+    // Actual areas are 1 and 3, while proposal boxes have areas 1 and 4.
+    expect(small_count > 2700 && small_count < 3300,
+           "disconnected sampling did not preserve uniform area weighting");
+    BlueNoiseSamplingOptions blue;
+    blue.point_count = 100;
+    blue.attempts_per_candidate = 100;
+    for (const FloatPoint& point : sampler.generate_blue_noise(blue)) {
+        expect(point_is_strictly_inside_domain(point, domains[0], points) ||
+                   point_is_strictly_inside_domain(point, domains[1], points),
+               "disconnected blue noise returned a point outside its domain");
+    }
+
+    // Overlapping boxes in a sparse union exercise the 1/coverage correction.
+    sampler.set_polygon_interiors(
+        std::vector<Point>{{0, 0}, {2, 0}, {2, 1}, {0, 1},
+                           {1, 0}, {3, 0}, {3, 1}, {1, 1},
+                           {1000, 0}, {1001, 0}, {1001, 1}, {1000, 1}},
+        {{{0, 1, 2, 3}, {}}, {{4, 5, 6, 7}, {}}, {{8, 9, 10, 11}, {}}});
+    std::size_t bins[4] = {};
+    for (const FloatPoint& point : sampler.generate_uniform(options)) {
+        expect(point.y > 0 && point.y < 1 &&
+                   ((point.x > 0 && point.x < 3) ||
+                    (point.x > 1000 && point.x < 1001)),
+               "overlapping domain sampler returned an outside point");
+        ++bins[point.x < 1 ? 0 : point.x < 2 ? 1 : point.x < 3 ? 2 : 3];
+    }
+    for (const std::size_t count : bins) {
+        expect(count > 2700 && count < 3300,
+               "overlapping proposals biased uniform samples");
+    }
+}
+
+void validate_sampling_numerical_limits() {
+    using delaunay32::FloatPoint;
+    using namespace delaunay32::extras;
+    PointSampler sampler;
+    const double maximum = std::numeric_limits<double>::max();
+    expect_invalid_argument(
+        [&] { sampler.set_bounds({-maximum, maximum, 0.0, 1.0}); },
+        "overflowing sampling x span was accepted");
+    expect_invalid_argument(
+        [&] { sampler.set_bounds({0.0, 1.0, -maximum, maximum}); },
+        "overflowing sampling y span was accepted");
+    const PolygonDomain square{{0, 1, 2, 3}, {}};
+    expect_invalid_argument(
+        [&] {
+            sampler.set_polygon_interiors(
+                std::vector<FloatPoint>{{-maximum, 0.0}, {maximum, 0.0},
+                                        {maximum, 1.0}, {-maximum, 1.0}},
+                {square});
+        },
+        "overflowing polygon sampling span was accepted");
+
+    // Exercise both reciprocal overflow and cell-width underflow. Sanitizers
+    // must also see the grid insertion and nearest-neighbor lookup paths.
+    for (const double extent : {1e-310,
+                               std::numeric_limits<double>::denorm_min()}) {
+        sampler.set_bounds({0.0, extent, 0.0, extent});
+        BlueNoiseSamplingOptions blue;
+        blue.point_count = 8;
+        const auto samples = sampler.generate_blue_noise(blue);
+        expect(samples.size() == blue.point_count,
+               "tiny bounds blue-noise sample count changed");
+        for (const FloatPoint& point : samples) {
+            expect(std::isfinite(point.x) && std::isfinite(point.y) &&
+                       point.x >= 0.0 && point.x <= extent &&
+                       point.y >= 0.0 && point.y <= extent,
+                   "tiny bounds produced an invalid sample");
+        }
+    }
+
+    // A translation must not turn a small, valid domain into a zero-area or
+    // wildly oversized region through cancellation in the area calculation.
+    for (const double offset : {0.0, 1e10, 1e12}) {
+        const std::vector<FloatPoint> points = {
+            {offset, offset}, {offset + 1.0, offset},
+            {offset + 1.0, offset + 1.0}, {offset, offset + 1.0}};
+        sampler.set_polygon_interiors(points, {square});
+        JitteredGridSamplingOptions jittered;
+        jittered.point_count = 10;
+        const auto samples = sampler.generate_jittered_grid(jittered);
+        expect(samples.size() == jittered.point_count,
+               "translated polygon sample count changed");
+        for (const FloatPoint& point : samples) {
+            expect(point_is_strictly_inside_domain(point, square, points),
+                   "translated polygon sample is outside its domain");
+        }
+    }
 }
 
 void validate_sampling() {
@@ -744,6 +917,9 @@ int main(int argc, char** argv) {
         }
         validate_serialization_locale(argv[1], argv[2]);
         validate_sampling();
+        validate_sampling_numerical_limits();
+        validate_disconnected_sampling();
+        validate_geometry_and_svg_overloads();
         validate_extreme_domain_query();
         Geometry geometry = make_geometry();
         validate_json_round_trip(argv[1], geometry);

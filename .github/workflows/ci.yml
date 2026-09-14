@@ -28,7 +28,9 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Benchmark smoke test
-        run: ./build/delaunay_benchmark --quick --sizes 1000,50000
+        run: |
+          ./build/delaunay_benchmark --quick --sizes 1000,50000
+          ./build/delaunay_workload_benchmark --quick
 
       - name: Install
         run: cmake --install build --prefix staging

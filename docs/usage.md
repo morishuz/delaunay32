@@ -280,7 +280,8 @@ const auto converted = delaunay32::quantize(source, options);
 | `FixedScale` | Caller-provided `origin_x`, `origin_y`, and `scale` |
 
 Automatic mode rejects an input whose coordinate span overflows double
-precision, even when every individual coordinate is finite.
+precision or whose nonzero span requires an infinite scale, even when every
+individual coordinate is finite. Coincident inputs still use a zero scale.
 
 `max_coordinate_error` rejects a mapping that exceeds an application limit.
 Set `collision_policy` to `QuantizationCollisionPolicy::Reject` to reject
@@ -472,9 +473,20 @@ const std::vector<delaunay32::FloatPoint> interiors =
     sampler.generate_blue_noise(options);
 ```
 
+Sampling bounds must have finite coordinates and finite axis spans. This also
+applies to the combined bounding rectangle of polygon domains; invalid ranges
+throw `std::invalid_argument` when the region is configured. Blue-noise sampling
+uses a linear nearest-neighbor fallback when grid cells are too small to
+represent safely.
+
 Polygon samples are strictly inside an outer ring and outside its holes.
-Multiple domains form one sampling region. Uniform sampling uses rejection
-sampling over that region. Best-candidate blue noise maximizes distance from
+Multiple domains form one sampling region. For sparse unions, random candidates
+come from domain bounding rectangles chosen in proportion to their areas, with
+an overlap correction to preserve uniform sampling over the union. Dense unions
+use the combined bounding rectangle. Both paths reject boundaries and holes.
+Equal regions and options remain deterministic, but sparse multi-domain sample
+sequences differ from releases that sampled only the combined rectangle.
+Best-candidate blue noise maximizes distance from
 domain boundaries and previously accepted samples. It uses an exact spatial
 nearest-neighbor index, but still evaluates `candidates_per_point` polygon
 candidates for every result.

@@ -2120,12 +2120,34 @@ void test_stateful_api_lifecycle() {
     configure(pending_assignment, 1, ResultDetail::Full);
     pending_assignment.set_points(points);
     Triangulator assigned;
+    assigned.set_points(points);
+    (void)assigned.triangulate();
     assigned = std::move(pending_assignment);
     const TriangulationResult assigned_result = assigned.triangulate();
     require(
         !assigned_result.halfedges.empty() &&
             assigned_result.report.input_points == points.size(),
         "move assignment did not preserve a configured problem");
+
+    // Moving transfers the implementation and its configured problem. Both
+    // sources must remain safe to reset, including changing options first.
+    for (Triangulator* source : {&pending_move, &pending_assignment}) {
+        require_logic([&] { source->triangulate(); },
+                      "moved-from instance retained a configured problem");
+        require_logic([&] { source->set_constraints({{0, 1}}); },
+                      "moved-from instance accepted constraints without points");
+        require_logic([&] { source->set_polygons({}); },
+                      "moved-from instance accepted polygons without points");
+        configure(*source, 1, ResultDetail::Full);
+        source->set_points(points);
+        const auto reused = source->triangulate();
+        require(benchmark_support::meshes_equal(
+                    reused.triangles, moved_result.triangles) &&
+                    reused.hull == moved_result.hull &&
+                    reused.representatives == moved_result.representatives,
+                "moved-from instance could not be reconfigured");
+    }
+
 }
 
 void test_geometry_setter_replacement_and_clearing() {
@@ -2534,6 +2556,16 @@ void test_invalid_inputs() {
             });
         },
         "overflowing automatic quantization span");
+    for (const double extent : {1e-310,
+                               std::numeric_limits<double>::denorm_min()}) {
+        require_invalid(
+            [&] { (void)quantize({{0.0, 0.0}, {extent, 0.0}, {0.0, extent}}); },
+            "overflowing automatic quantization scale");
+    }
+    const auto coincident_tiny = quantize({{1e-310, 1e-310}});
+    require(coincident_tiny.report.scale == 0.0 &&
+                coincident_tiny.report.max_coordinate_error == 0.0,
+            "zero-span tiny input should remain quantizable");
     QuantizationOptions invalid_grid;
     invalid_grid.mode = QuantizationMode::GridStep;
     require_invalid_options(invalid_grid, "zero quantization grid step");

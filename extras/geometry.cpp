@@ -30,7 +30,7 @@ SignedMagnitude multiply(std::int64_t a, std::int64_t b) {
     return {negative, magnitude_a * magnitude_b};
 }
 
-int orient_sign(const Point& a, const Point& b, const Point& point) {
+int orient(const Point& a, const Point& b, const Point& point) {
     const SignedMagnitude lhs = multiply(
         static_cast<std::int64_t>(b.x) - a.x,
         static_cast<std::int64_t>(point.y) - a.y);
@@ -47,8 +47,22 @@ int orient_sign(const Point& a, const Point& b, const Point& point) {
     return lhs.negative ? -magnitude_order : magnitude_order;
 }
 
-bool point_on_segment(const Point& point, const Point& a, const Point& b) {
-    if (orient_sign(a, b, point) != 0) {
+SamplingScalar orient(
+    const FloatPoint& a,
+    const FloatPoint& b,
+    const FloatPoint& point) {
+    return
+        (static_cast<SamplingScalar>(b.x) - a.x) *
+            (static_cast<SamplingScalar>(point.y) - a.y) -
+        (static_cast<SamplingScalar>(b.y) - a.y) *
+            (static_cast<SamplingScalar>(point.x) - a.x);
+}
+
+// Share traversal, but retain exact integer and binary64 predicate overloads.
+template <typename PointType>
+bool point_on_segment(
+    const PointType& point, const PointType& a, const PointType& b) {
+    if (orient(a, b, point) != 0) {
         return false;
     }
     return point.x >= std::min(a.x, b.x) &&
@@ -79,19 +93,20 @@ void validate_ring(
     }
 }
 
+template <typename PointType>
 RingLocation locate_in_ring(
-    const Point& point,
+    const PointType& point,
     const std::vector<std::uint32_t>& ring,
-    const std::vector<Point>& points) {
+    const std::vector<PointType>& points) {
     bool inside = false;
     for (std::size_t i = 0; i < ring.size(); ++i) {
-        const Point& a = points[ring[i]];
-        const Point& b = points[ring[(i + 1) % ring.size()]];
+        const PointType& a = points[ring[i]];
+        const PointType& b = points[ring[(i + 1) % ring.size()]];
         if (point_on_segment(point, a, b)) {
             return RingLocation::boundary;
         }
         if ((a.y > point.y) != (b.y > point.y)) {
-            const int side = orient_sign(a, b, point);
+            const auto side = orient(a, b, point);
             const bool crosses_to_right =
                 (b.y > a.y && side > 0) ||
                 (b.y < a.y && side < 0);
@@ -103,52 +118,21 @@ RingLocation locate_in_ring(
     return inside ? RingLocation::inside : RingLocation::outside;
 }
 
-SamplingScalar orient(
-    const FloatPoint& a,
-    const FloatPoint& b,
-    const FloatPoint& point) {
-    return
-        (static_cast<SamplingScalar>(b.x) - a.x) *
-            (static_cast<SamplingScalar>(point.y) - a.y) -
-        (static_cast<SamplingScalar>(b.y) - a.y) *
-            (static_cast<SamplingScalar>(point.x) - a.x);
-}
-
-bool point_on_segment(
-    const FloatPoint& point,
-    const FloatPoint& a,
-    const FloatPoint& b) {
-    if (orient(a, b, point) != 0.0) {
+template <typename PointType>
+bool inside_domain(
+    const PointType& point,
+    const PolygonDomain& domain,
+    const std::vector<PointType>& points) {
+    if (locate_in_ring(point, domain.outer_ring, points) !=
+        RingLocation::inside) {
         return false;
     }
-    return point.x >= std::min(a.x, b.x) &&
-           point.x <= std::max(a.x, b.x) &&
-           point.y >= std::min(a.y, b.y) &&
-           point.y <= std::max(a.y, b.y);
-}
-
-RingLocation locate_in_ring(
-    const FloatPoint& point,
-    const std::vector<std::uint32_t>& ring,
-    const std::vector<FloatPoint>& points) {
-    bool inside = false;
-    for (std::size_t i = 0; i < ring.size(); ++i) {
-        const FloatPoint& a = points[ring[i]];
-        const FloatPoint& b = points[ring[(i + 1) % ring.size()]];
-        if (point_on_segment(point, a, b)) {
-            return RingLocation::boundary;
-        }
-        if ((a.y > point.y) != (b.y > point.y)) {
-            const SamplingScalar side = orient(a, b, point);
-            const bool crosses_to_right =
-                (b.y > a.y && side > 0.0) ||
-                (b.y < a.y && side < 0.0);
-            if (crosses_to_right) {
-                inside = !inside;
-            }
+    for (const std::vector<std::uint32_t>& hole : domain.holes) {
+        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
+            return false;
         }
     }
-    return inside ? RingLocation::inside : RingLocation::outside;
+    return true;
 }
 
 void validate_finite(const std::vector<FloatPoint>& points) {
@@ -182,32 +166,14 @@ bool point_is_strictly_inside_domain_unchecked(
     const Point& point,
     const PolygonDomain& domain,
     const std::vector<Point>& points) {
-    if (locate_in_ring(point, domain.outer_ring, points) !=
-        RingLocation::inside) {
-        return false;
-    }
-    for (const std::vector<std::uint32_t>& hole : domain.holes) {
-        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
-            return false;
-        }
-    }
-    return true;
+    return inside_domain(point, domain, points);
 }
 
 bool point_is_strictly_inside_domain_unchecked(
     const FloatPoint& point,
     const PolygonDomain& domain,
     const std::vector<FloatPoint>& points) {
-    if (locate_in_ring(point, domain.outer_ring, points) !=
-        RingLocation::inside) {
-        return false;
-    }
-    for (const std::vector<std::uint32_t>& hole : domain.holes) {
-        if (locate_in_ring(point, hole, points) != RingLocation::outside) {
-            return false;
-        }
-    }
-    return true;
+    return inside_domain(point, domain, points);
 }
 
 }  // namespace detail

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunay32/delaunay.hpp"
-#include "internal.hpp"
+#include "triangulator_impl.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -12,7 +11,7 @@
 namespace delaunay32 {
 using detail::ThreadBarrier;
 
-std::size_t Triangulator::checked_flat_edge_count(
+std::size_t Triangulator::Impl::checked_flat_edge_count(
     std::size_t triangle_count) {
     if (triangle_count >
         std::numeric_limits<std::size_t>::max() / 3) {
@@ -27,17 +26,17 @@ std::size_t Triangulator::checked_flat_edge_count(
     return edge_count;
 }
 
-void Triangulator::prepare_full_export() {
+void Triangulator::Impl::prepare_full_export() {
     halfedges_out_.clear();
     hull_out_.clear();
 
-    // The outer darts have no opposite output edge. edge_next_ is no longer
+    // The outer darts have no opposite output edge. arena_.next is no longer
     // needed by face traversal, so reuse it as a dense dart-to-output-edge
     // map instead of allocating and populating a hash table.
     std::uint32_t outer = outer_seed_;
     do {
         const std::uint32_t next = lnext(outer);
-        edge_origin_[outer] |= kVisitedBit;
+        arena_.origin[outer] |= kVisitedBit;
         outer = next;
     } while (outer != outer_seed_);
 
@@ -46,7 +45,7 @@ void Triangulator::prepare_full_export() {
     // those darts directly without clearing the complete map first.
 }
 
-void Triangulator::export_hull() {
+void Triangulator::Impl::export_hull() {
     if (triangles_out_.empty()) {
         const auto endpoints = std::minmax_element(
             points_.begin(), points_.end(), SiteLessXY{});
@@ -72,12 +71,12 @@ void Triangulator::export_hull() {
     std::rotate(hull_out_.begin(), start, hull_out_.end());
 }
 
-void Triangulator::export_full_result() {
+void Triangulator::Impl::export_full_result() {
     triangles_out_.clear();
     triangles_out_.reserve(points_.size() * 2);
     prepare_full_export();
 
-    for (const EdgeRange range : edge_ranges_) {
+    for (const EdgeRange range : arena_.ranges) {
         for (std::uint32_t start = range.first; start < range.last; ++start) {
             std::uint32_t second = 0;
             std::uint32_t third = 0;
@@ -94,10 +93,10 @@ void Triangulator::export_full_result() {
             // Keep the face's darts until every dart-to-output entry exists.
             // Reuse this buffer so adjacency can be written in output order.
             triangles_out_.push_back({start, second, third});
-            edge_next_[start] = static_cast<std::uint32_t>(flat_edge);
-            edge_next_[second] =
+            arena_.next[start] = static_cast<std::uint32_t>(flat_edge);
+            arena_.next[second] =
                 static_cast<std::uint32_t>(flat_edge + 1);
-            edge_next_[third] =
+            arena_.next[third] =
                 static_cast<std::uint32_t>(flat_edge + 2);
         }
     }
@@ -112,9 +111,9 @@ void Triangulator::export_full_result() {
              {triangle.i0, triangle.i1, triangle.i2}) {
             const std::uint32_t opposite = sym(dart);
             halfedges_out_[flat_edge++] =
-                (edge_origin_[opposite] & kVisitedBit) != 0
+                (arena_.origin[opposite] & kVisitedBit) != 0
                     ? -1
-                    : static_cast<std::int64_t>(edge_next_[opposite]);
+                    : static_cast<std::int64_t>(arena_.next[opposite]);
         }
         triangle = {
             points_[org(triangle.i0)].original,
@@ -125,11 +124,11 @@ void Triangulator::export_full_result() {
     export_hull();
 }
 
-void Triangulator::export_full_result_parallel(
+void Triangulator::Impl::export_full_result_parallel(
     std::size_t thread_count,
     detail::WorkerTeam& workers) {
     const std::size_t worker_count =
-        std::min(thread_count, edge_ranges_.size());
+        std::min(thread_count, arena_.ranges.size());
     if (worker_count <= 1) {
         export_full_result();
         return;
@@ -149,15 +148,15 @@ void Triangulator::export_full_result_parallel(
     const auto run = [&](std::size_t worker_index) {
         try {
             const std::size_t first_range =
-                edge_ranges_.size() * worker_index / worker_count;
+                arena_.ranges.size() * worker_index / worker_count;
             const std::size_t last_range =
-                edge_ranges_.size() * (worker_index + 1) / worker_count;
+                arena_.ranges.size() * (worker_index + 1) / worker_count;
 
             std::size_t count = 0;
             for (std::size_t index = first_range;
                  index < last_range;
                  ++index) {
-                const EdgeRange range = edge_ranges_[index];
+                const EdgeRange range = arena_.ranges[index];
                 for (std::uint32_t start = range.first;
                      start < range.last;
                      ++start) {
@@ -189,7 +188,7 @@ void Triangulator::export_full_result_parallel(
             for (std::size_t index = first_range;
                  index < last_range;
                  ++index) {
-                const EdgeRange range = edge_ranges_[index];
+                const EdgeRange range = arena_.ranges[index];
                 for (std::uint32_t start = range.first;
                      start < range.last;
                      ++start) {
@@ -200,11 +199,11 @@ void Triangulator::export_full_result_parallel(
                     }
                     const std::size_t flat_edge = triangle_index * 3;
                     triangles_out_[triangle_index] = {start, second, third};
-                    edge_next_[start] =
+                    arena_.next[start] =
                         static_cast<std::uint32_t>(flat_edge);
-                    edge_next_[second] =
+                    arena_.next[second] =
                         static_cast<std::uint32_t>(flat_edge + 1);
-                    edge_next_[third] =
+                    arena_.next[third] =
                         static_cast<std::uint32_t>(flat_edge + 2);
                     ++triangle_index;
                 }
@@ -222,9 +221,9 @@ void Triangulator::export_full_result_parallel(
                      {triangle.i0, triangle.i1, triangle.i2}) {
                     const std::uint32_t opposite = sym(dart);
                     halfedges_out_[flat_edge++] =
-                        (edge_origin_[opposite] & kVisitedBit) != 0
+                        (arena_.origin[opposite] & kVisitedBit) != 0
                             ? -1
-                            : static_cast<std::int64_t>(edge_next_[opposite]);
+                            : static_cast<std::int64_t>(arena_.next[opposite]);
                 }
                 triangle = {
                     points_[org(triangle.i0)].original,
@@ -241,7 +240,7 @@ void Triangulator::export_full_result_parallel(
     export_hull();
 }
 
-void Triangulator::finish_full_export() {
+void Triangulator::Impl::finish_full_export() {
     if (active_thread_count_ > 1) {
         export_full_result_parallel(
             active_thread_count_, *worker_team_);
@@ -250,7 +249,7 @@ void Triangulator::finish_full_export() {
     }
 }
 
-TriangulationResult Triangulator::make_result(
+TriangulationResult Triangulator::Impl::make_result(
     PredicateWidth predicate_width,
     std::vector<std::uint32_t>&& representatives) {
     TriangulationResult result;

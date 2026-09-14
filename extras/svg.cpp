@@ -40,7 +40,8 @@ enum class SvgElementKind {
 struct SvgElement {
     SvgElementKind kind = SvgElementKind::Point;
     std::vector<SvgCoordinate> points;
-    std::vector<std::vector<SvgCoordinate>> rings;
+    // Paths share one coordinate buffer; each end closes a ring.
+    std::vector<std::size_t> ring_ends;
     SvgCoordinate first;
     SvgCoordinate second;
     SvgPointStyle point_style;
@@ -292,37 +293,44 @@ void draw_adjacency_colored_triangles(
 }
 
 template <typename PointType>
-std::vector<SvgCoordinate> make_ring(
+void append_ring(
+    SvgElement& element,
     const std::vector<PointType>& points,
     const std::vector<std::uint32_t>& ring) {
     if (ring.size() < 3) {
         throw std::invalid_argument(
             "SVG polygon ring requires at least three indices");
     }
-    std::vector<SvgCoordinate> result;
-    result.reserve(ring.size());
     for (const std::uint32_t index : ring) {
         if (index >= points.size()) {
             throw std::invalid_argument(
                 "polygon index is outside the points array");
         }
-        result.push_back(coordinate(points[index]));
+        element.points.push_back(coordinate(points[index]));
     }
-    return result;
+    element.ring_ends.push_back(element.points.size());
 }
 
 template <typename PointType>
-std::vector<std::vector<SvgCoordinate>> make_domain_rings(
+void append_polygon(
+    SvgElement& element,
+    const std::vector<PointType>& points,
+    const std::vector<std::uint32_t>& ring) {
+    element.points.reserve(ring.size());
+    append_ring(element, points, ring);
+}
+
+template <typename PointType>
+void append_polygon(
+    SvgElement& element,
     const std::vector<PointType>& points,
     const PolygonDomain& domain) {
     detail::validate_domain(domain, points.size(), "SVG polygon");
-    std::vector<std::vector<SvgCoordinate>> result;
-    result.reserve(1 + domain.holes.size());
-    result.push_back(make_ring(points, domain.outer_ring));
+    element.ring_ends.reserve(1 + domain.holes.size());
+    append_ring(element, points, domain.outer_ring);
     for (const std::vector<std::uint32_t>& hole : domain.holes) {
-        result.push_back(make_ring(points, hole));
+        append_ring(element, points, hole);
     }
-    return result;
 }
 
 std::string escape_xml(const std::string& value) {
@@ -364,6 +372,7 @@ SvgBounds element_bounds(const std::vector<SvgElement>& elements) {
     for (const SvgElement& element : elements) {
         switch (element.kind) {
         case SvgElementKind::Point:
+        case SvgElementKind::Path:
             for (const SvgCoordinate& point : element.points) {
                 bounds.include(point);
             }
@@ -371,13 +380,6 @@ SvgBounds element_bounds(const std::vector<SvgElement>& elements) {
         case SvgElementKind::Line:
             bounds.include(element.first);
             bounds.include(element.second);
-            break;
-        case SvgElementKind::Path:
-            for (const std::vector<SvgCoordinate>& ring : element.rings) {
-                for (const SvgCoordinate& point : ring) {
-                    bounds.include(point);
-                }
-            }
             break;
         case SvgElementKind::Text:
             break;
@@ -525,6 +527,61 @@ struct Svg::Impl {
     SvgMargins margins;
     SvgTransform transform;
     std::vector<SvgElement> elements;
+
+    template <typename PointType>
+    void add_points(
+        const std::vector<PointType>& points,
+        const SvgPointStyle& style) {
+        validate_point_style(style);
+        if (points.empty()) {
+            return;
+        }
+        SvgElement element;
+        element.kind = SvgElementKind::Point;
+        element.points.reserve(points.size());
+        for (const PointType& point : points) {
+            element.points.push_back(coordinate(point));
+        }
+        element.point_style = style;
+        elements.push_back(std::move(element));
+    }
+
+    template <typename PointType, typename Polygon>
+    void add_polygon(
+        const std::vector<PointType>& points,
+        const Polygon& polygon,
+        const SvgShapeStyle& style) {
+        validate_shape_style(style);
+        SvgElement element;
+        element.kind = SvgElementKind::Path;
+        append_polygon(element, points, polygon);
+        element.shape_style = style;
+        elements.push_back(std::move(element));
+    }
+
+    template <typename PointType>
+    void add_triangles(
+        const std::vector<PointType>& points,
+        const std::vector<Triangle>& triangles,
+        const SvgShapeStyle& style) {
+        validate_shape_style(style);
+        validate_triangles(points, triangles);
+        if (triangles.empty()) {
+            return;
+        }
+        SvgElement element;
+        element.kind = SvgElementKind::Path;
+        element.points.reserve(triangles.size() * 3);
+        element.ring_ends.reserve(triangles.size());
+        for (const Triangle& triangle : triangles) {
+            element.points.push_back(coordinate(points[triangle.i0]));
+            element.points.push_back(coordinate(points[triangle.i1]));
+            element.points.push_back(coordinate(points[triangle.i2]));
+            element.ring_ends.push_back(element.points.size());
+        }
+        element.shape_style = style;
+        elements.push_back(std::move(element));
+    }
 };
 
 Svg::Svg(double width, double height) : impl_(std::make_unique<Impl>()) {
@@ -671,36 +728,14 @@ Svg& Svg::draw_line(
 Svg& Svg::draw_points(
     const std::vector<Point>& points,
     const SvgPointStyle& style) {
-    validate_point_style(style);
-    if (points.empty()) {
-        return *this;
-    }
-    SvgElement element;
-    element.kind = SvgElementKind::Point;
-    element.points.reserve(points.size());
-    for (const Point& point : points) {
-        element.points.push_back(coordinate(point));
-    }
-    element.point_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_points(points, style);
     return *this;
 }
 
 Svg& Svg::draw_points(
     const std::vector<FloatPoint>& points,
     const SvgPointStyle& style) {
-    validate_point_style(style);
-    if (points.empty()) {
-        return *this;
-    }
-    SvgElement element;
-    element.kind = SvgElementKind::Point;
-    element.points.reserve(points.size());
-    for (const FloatPoint& point : points) {
-        element.points.push_back(coordinate(point));
-    }
-    element.point_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_points(points, style);
     return *this;
 }
 
@@ -708,12 +743,7 @@ Svg& Svg::draw_polygon(
     const std::vector<Point>& points,
     const std::vector<std::uint32_t>& ring,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings.push_back(make_ring(points, ring));
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_polygon(points, ring, style);
     return *this;
 }
 
@@ -721,12 +751,7 @@ Svg& Svg::draw_polygon(
     const std::vector<FloatPoint>& points,
     const std::vector<std::uint32_t>& ring,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings.push_back(make_ring(points, ring));
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_polygon(points, ring, style);
     return *this;
 }
 
@@ -734,12 +759,7 @@ Svg& Svg::draw_polygon(
     const std::vector<Point>& points,
     const PolygonDomain& domain,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings = make_domain_rings(points, domain);
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_polygon(points, domain, style);
     return *this;
 }
 
@@ -747,12 +767,7 @@ Svg& Svg::draw_polygon(
     const std::vector<FloatPoint>& points,
     const PolygonDomain& domain,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings = make_domain_rings(points, domain);
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_polygon(points, domain, style);
     return *this;
 }
 
@@ -760,23 +775,7 @@ Svg& Svg::draw_triangles(
     const std::vector<Point>& points,
     const std::vector<Triangle>& triangles,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    validate_triangles(points, triangles);
-    if (triangles.empty()) {
-        return *this;
-    }
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings.reserve(triangles.size());
-    for (const Triangle& triangle : triangles) {
-        element.rings.push_back({
-            coordinate(points[triangle.i0]),
-            coordinate(points[triangle.i1]),
-            coordinate(points[triangle.i2]),
-        });
-    }
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_triangles(points, triangles, style);
     return *this;
 }
 
@@ -784,23 +783,7 @@ Svg& Svg::draw_triangles(
     const std::vector<FloatPoint>& points,
     const std::vector<Triangle>& triangles,
     const SvgShapeStyle& style) {
-    validate_shape_style(style);
-    validate_triangles(points, triangles);
-    if (triangles.empty()) {
-        return *this;
-    }
-    SvgElement element;
-    element.kind = SvgElementKind::Path;
-    element.rings.reserve(triangles.size());
-    for (const Triangle& triangle : triangles) {
-        element.rings.push_back({
-            coordinate(points[triangle.i0]),
-            coordinate(points[triangle.i1]),
-            coordinate(points[triangle.i2]),
-        });
-    }
-    element.shape_style = style;
-    impl_->elements.push_back(std::move(element));
+    impl_->add_triangles(points, triangles, style);
     return *this;
 }
 
@@ -884,17 +867,19 @@ void Svg::write_svg(std::ostream& output) const {
                    << "\" stroke-linecap=\"round\"/>\n";
             break;
         }
-        case SvgElementKind::Path:
+        case SvgElementKind::Path: {
             output << "<path d=\"";
-            for (const std::vector<SvgCoordinate>& ring : element.rings) {
+            std::size_t first = 0;
+            for (const std::size_t end : element.ring_ends) {
                 output << "M ";
-                for (std::size_t i = 0; i < ring.size(); ++i) {
-                    if (i != 0) {
+                for (std::size_t i = first; i < end; ++i) {
+                    if (i != first) {
                         output << " L ";
                     }
-                    write_coordinate(output, transform.map(ring[i]));
+                    write_coordinate(output, transform.map(element.points[i]));
                 }
                 output << " Z ";
+                first = end;
             }
             output << "\" fill=\"" << escape_xml(element.shape_style.fill)
                    << "\" fill-rule=\"evenodd\" stroke=\""
@@ -903,6 +888,7 @@ void Svg::write_svg(std::ostream& output) const {
                    << element.shape_style.stroke_width
                    << "\" stroke-linejoin=\"round\"/>\n";
             break;
+        }
         case SvgElementKind::Text:
             output << "<text x=\"" << element.first.x << "\" y=\""
                    << element.first.y << "\" font-family=\""

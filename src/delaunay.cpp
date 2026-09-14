@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunay32/delaunay.hpp"
-#include "internal.hpp"
+#include "triangulator_impl.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -18,14 +17,37 @@ using detail::ThreadBarrier;
 // Public entry points, input normalization, and Morton ordering live here.
 
 Triangulator::Triangulator() = default;
-
 Triangulator::~Triangulator() = default;
+Triangulator::Triangulator(Triangulator&&) noexcept = default;
+Triangulator& Triangulator::operator=(Triangulator&&) noexcept = default;
 
-Triangulator::Triangulator(
-    Triangulator&&) noexcept = default;
+Triangulator::Impl& Triangulator::implementation() {
+    // Lazy ownership also lets a moved-from instance start another problem.
+    if (!impl_) {
+        impl_ = std::make_unique<Impl>();
+    }
+    return *impl_;
+}
 
-Triangulator& Triangulator::operator=(
-    Triangulator&&) noexcept = default;
+void Triangulator::set_options(TriangulationOptions options) {
+    implementation().set_options(options);
+}
+
+void Triangulator::set_points(const std::vector<Point>& points) {
+    implementation().set_points(points);
+}
+
+void Triangulator::set_constraints(std::vector<Constraint> constraints) {
+    implementation().set_constraints(std::move(constraints));
+}
+
+void Triangulator::set_polygons(std::vector<PolygonDomain> polygons) {
+    implementation().set_polygons(std::move(polygons));
+}
+
+TriangulationResult Triangulator::triangulate() {
+    return implementation().triangulate();
+}
 
 namespace {
 
@@ -52,7 +74,7 @@ bool predicates_fit_limit(
 
 }  // namespace
 
-void Triangulator::require_point_count(std::size_t point_count) {
+void Triangulator::Impl::require_point_count(std::size_t point_count) {
     if (point_count < 3) {
         throw std::invalid_argument("need at least 3 points");
     }
@@ -61,7 +83,7 @@ void Triangulator::require_point_count(std::size_t point_count) {
     }
 }
 
-detail::WorkerTeam* Triangulator::ensure_worker_team(
+detail::WorkerTeam* Triangulator::Impl::ensure_worker_team(
     std::size_t thread_count) {
     if (thread_count <= 1) {
         return nullptr;
@@ -149,7 +171,7 @@ bool Triangulator::int64_wide_intermediates_for_spans(
 #endif
 }
 
-void Triangulator::load_int_points(const std::vector<Point>& points) {
+void Triangulator::Impl::load_int_points(const std::vector<Point>& points) {
     points_.resize(points.size());
     min_x_ = max_x_ = points[0].x;
     min_y_ = max_y_ = points[0].y;
@@ -170,7 +192,7 @@ void Triangulator::load_int_points(const std::vector<Point>& points) {
     }
 }
 
-void Triangulator::set_options(TriangulationOptions options) {
+void Triangulator::Impl::set_options(TriangulationOptions options) {
     if (options.result_detail != ResultDetail::Triangles &&
         options.result_detail != ResultDetail::Full) {
         throw std::invalid_argument("unknown result detail");
@@ -179,10 +201,9 @@ void Triangulator::set_options(TriangulationOptions options) {
     result_detail_ = options.result_detail;
 }
 
-void Triangulator::set_points(const std::vector<Point>& points) {
+void Triangulator::Impl::set_points(const std::vector<Point>& points) {
     problem_ready_ = false;
-    constraints_.clear();
-    polygons_.clear();
+    constraints_.clear_problem();
     triangles_out_.clear();
     halfedges_out_.clear();
     hull_out_.clear();
@@ -192,14 +213,14 @@ void Triangulator::set_points(const std::vector<Point>& points) {
     problem_ready_ = true;
 }
 
-void Triangulator::require_ready_problem() const {
+void Triangulator::Impl::require_ready_problem() const {
     if (!problem_ready_) {
         throw std::logic_error(
             "set_points() is required before configuring or triangulating");
     }
 }
 
-void Triangulator::set_constraints(
+void Triangulator::Impl::set_constraints(
     std::vector<Constraint> constraints) {
     require_ready_problem();
     for (const Constraint constraint : constraints) {
@@ -213,10 +234,10 @@ void Triangulator::set_constraints(
                 "constraint endpoints are coincident");
         }
     }
-    constraints_ = std::move(constraints);
+    constraints_.segments = std::move(constraints);
 }
 
-void Triangulator::set_polygons(
+void Triangulator::Impl::set_polygons(
     std::vector<PolygonDomain> polygons) {
     require_ready_problem();
     const auto validate_ring = [&](const std::vector<std::uint32_t>& ring) {
@@ -237,10 +258,10 @@ void Triangulator::set_polygons(
             validate_ring(hole);
         }
     }
-    polygons_ = std::move(polygons);
+    constraints_.polygons = std::move(polygons);
 }
 
-TriangulationResult Triangulator::triangulate() {
+TriangulationResult Triangulator::Impl::triangulate() {
     require_ready_problem();
     // A failed run is consumed as well: topology construction and constraint
     // recovery mutate the loaded sites and edge arena in place.
@@ -248,15 +269,15 @@ TriangulationResult Triangulator::triangulate() {
 
     const bool need_representatives =
         result_detail_ == ResultDetail::Full ||
-        !constraints_.empty() || !polygons_.empty();
+        !constraints_.segments.empty() || !constraints_.polygons.empty();
     std::vector<std::uint32_t> representatives;
     const PredicateWidth predicate_width = build_loaded_topology(
         need_representatives ? &representatives : nullptr);
 
-    if (!constraints_.empty() || !polygons_.empty()) {
+    if (!constraints_.segments.empty() || !constraints_.polygons.empty()) {
         build_constraint_indices(representatives, input_point_count_);
         const auto domains = prepare_polygon_domains();
-        std::vector<Constraint> combined = constraints_;
+        std::vector<Constraint> combined = constraints_.segments;
         std::size_t boundary_count = 0;
         for (const auto& domain : domains) {
             for (const auto& ring : domain) {
@@ -291,7 +312,7 @@ TriangulationResult Triangulator::triangulate() {
     return make_result(predicate_width, std::move(representatives));
 }
 
-PredicateWidth Triangulator::build_loaded_topology(
+PredicateWidth Triangulator::Impl::build_loaded_topology(
     std::vector<std::uint32_t>* representatives) {
     std::size_t point_count = points_.size();
     if (representatives != nullptr) {
@@ -446,16 +467,16 @@ PredicateWidth Triangulator::build_loaded_topology(
     if (point_count < kParallelMinPoints) {
         effective_threads = 1;
     }
-    edge_count_ = 0;
-    edge_ranges_.clear();
+    arena_.count = 0;
+    arena_.ranges.clear();
     if (point_count >
         static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) /
-            kEdgeArenaDartsPerPoint) {
+            detail::EdgeArena::kDartsPerPoint) {
         throw std::invalid_argument(
             "point count exceeds edge arena index range");
     }
     std::size_t edge_capacity =
-        point_count * kEdgeArenaDartsPerPoint;
+        point_count * detail::EdgeArena::kDartsPerPoint;
 #if defined(DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT)
     // Match the physical allocation to the private test limit so sanitizer
     // runs also detect a write past a partially filled final edge block.
@@ -464,9 +485,9 @@ PredicateWidth Triangulator::build_loaded_topology(
         static_cast<std::size_t>(
             DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT));
 #endif
-    edge_capacity_limit_ = edge_capacity;
-    if (edge_origin_.size() < edge_capacity) {
-        resize_edge_arena(edge_capacity);
+    arena_.capacity_limit = edge_capacity;
+    if (arena_.origin.size() < edge_capacity) {
+        arena_.resize(edge_capacity);
     }
     active_thread_count_ = effective_threads;
     DirectionalHulls hull;
@@ -483,8 +504,8 @@ PredicateWidth Triangulator::build_loaded_topology(
             // indices into it. Discard the partial topology and rebuild using
             // the serial allocator, which grows its arrays as needed. Leaf
             // sorting and wide lifts are recomputed during the serial build.
-            edge_count_ = 0;
-            edge_ranges_.clear();
+            arena_.count = 0;
+            arena_.ranges.clear();
             active_thread_count_ = 1;
             serial_build = true;
         }
@@ -493,14 +514,14 @@ PredicateWidth Triangulator::build_loaded_topology(
         hull = wide_predicates
                    ? build_morton_range<true>(0, point_count)
                    : build_morton_range<false>(0, point_count);
-        edge_ranges_.push_back(
-            {0, static_cast<std::uint32_t>(edge_count_)});
+        arena_.ranges.push_back(
+            {0, static_cast<std::uint32_t>(arena_.count)});
     }
     outer_seed_ = sym(hull.x.left_outer);
     return predicate_width;
 }
 
-void Triangulator::sort_points_morton(
+void Triangulator::Impl::sort_points_morton(
     std::size_t thread_count,
     std::uint32_t maximum_key,
     detail::WorkerTeam* workers) {
@@ -680,7 +701,7 @@ void Triangulator::sort_points_morton(
     }
 }
 
-std::uint32_t Triangulator::morton_code(
+std::uint32_t Triangulator::Impl::morton_code(
     std::uint32_t x,
     std::uint32_t y) {
     const auto spread = [](std::uint32_t value) {

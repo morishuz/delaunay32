@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunay32/delaunay.hpp"
-#include "internal.hpp"
+#include "triangulator_impl.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -10,23 +9,23 @@ namespace delaunay32 {
 using detail::ThreadBarrier;
 
 // Face discovery and materialization are isolated from the topology kernel.
-void Triangulator::mark_outer_face() {
+void Triangulator::Impl::mark_outer_face() {
     std::uint32_t outer = outer_seed_;
     do {
-        edge_origin_[outer] |= kVisitedBit;
+        arena_.origin[outer] |= kVisitedBit;
         outer = lnext(outer);
     } while (outer != outer_seed_);
 }
 
-void Triangulator::export_triangles() {
+void Triangulator::Impl::export_triangles() {
     triangles_out_.clear();
     triangles_out_.reserve(points_.size() * 2);
 
     mark_outer_face();
 
-    for (const EdgeRange range : edge_ranges_) {
+    for (const EdgeRange range : arena_.ranges) {
         for (std::uint32_t start = range.first; start < range.last; ++start) {
-            if ((edge_origin_[start] & kVisitedBit) != 0) {
+            if ((arena_.origin[start] & kVisitedBit) != 0) {
                 continue;
             }
             const std::uint32_t second = lnext(start);
@@ -34,9 +33,9 @@ void Triangulator::export_triangles() {
             const std::uint32_t a = org(start);
             const std::uint32_t b = org(second);
             const std::uint32_t c = org(third);
-            edge_origin_[start] |= kVisitedBit;
-            edge_origin_[second] |= kVisitedBit;
-            edge_origin_[third] |= kVisitedBit;
+            arena_.origin[start] |= kVisitedBit;
+            arena_.origin[second] |= kVisitedBit;
+            arena_.origin[third] |= kVisitedBit;
             triangles_out_.push_back({
                 points_[a].original,
                 points_[b].original,
@@ -46,11 +45,11 @@ void Triangulator::export_triangles() {
     }
 }
 
-void Triangulator::export_triangles_parallel(
+void Triangulator::Impl::export_triangles_parallel(
     std::size_t thread_count,
     detail::WorkerTeam& workers) {
     const std::size_t worker_count =
-        std::min(thread_count, edge_ranges_.size());
+        std::min(thread_count, arena_.ranges.size());
     if (worker_count <= 1) {
         export_triangles();
         return;
@@ -83,13 +82,13 @@ void Triangulator::export_triangles_parallel(
             std::vector<Triangle> buffer;
             buffer.swap(export_scratch_[worker_index]);
             const std::size_t first_range =
-                edge_ranges_.size() * worker_index / worker_count;
+                arena_.ranges.size() * worker_index / worker_count;
             const std::size_t last_range =
-                edge_ranges_.size() * (worker_index + 1) / worker_count;
+                arena_.ranges.size() * (worker_index + 1) / worker_count;
             for (std::size_t index = first_range;
                  index < last_range;
                  ++index) {
-                const EdgeRange range = edge_ranges_[index];
+                const EdgeRange range = arena_.ranges[index];
                 std::uint32_t second = 0;
                 std::uint32_t third = 0;
                 for (std::uint32_t start = range.first;
@@ -134,7 +133,7 @@ void Triangulator::export_triangles_parallel(
     workers.run(worker_count, run);
 }
 
-void Triangulator::finish_triangle_export() {
+void Triangulator::Impl::finish_triangle_export() {
     if (active_thread_count_ > 1) {
         export_triangles_parallel(
             active_thread_count_, *worker_team_);

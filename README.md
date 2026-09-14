@@ -146,6 +146,12 @@ The converted vector preserves the source length and index order. Its
 Run `./build/delaunay_benchmark --quick` for a short local performance run
 across uniform, clustered, and diagonal point distributions.
 
+With extras enabled, `./build/delaunay_workload_benchmark --quick` also covers
+constraints, full results, SVG recording/serialization, and bounds/disconnected
+polygon sampling. Omit `--quick` for larger fixtures and seven measured runs.
+CSV results report median milliseconds; input generation is excluded, while
+output destruction and (for triangulation) `set_points()` are included.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Third-party dependency status is recorded in

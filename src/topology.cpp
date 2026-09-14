@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "delaunay32/delaunay.hpp"
-#include "internal.hpp"
+#include "triangulator_impl.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -25,14 +24,14 @@ using detail::ThreadBarrier;
 template <
     bool WidePredicates,
     bool ParallelAllocation>
-Triangulator::HullEdges Triangulator::build_range(
+Triangulator::Impl::HullEdges Triangulator::Impl::build_range(
     std::size_t first,
     std::size_t last,
     EdgeCursor* cursor) {
     const std::size_t count = last - first;
     if (count == 2) {
         const std::uint32_t edge =
-            make_edge<ParallelAllocation>(
+            arena_.make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first),
             static_cast<std::uint32_t>(first + 1),
             cursor);
@@ -41,12 +40,12 @@ Triangulator::HullEdges Triangulator::build_range(
 
     if (count == 3) {
         const std::uint32_t a =
-            make_edge<ParallelAllocation>(
+            arena_.make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first),
             static_cast<std::uint32_t>(first + 1),
             cursor);
         const std::uint32_t b =
-            make_edge<ParallelAllocation>(
+            arena_.make_edge<ParallelAllocation>(
             static_cast<std::uint32_t>(first + 1),
             static_cast<std::uint32_t>(first + 2),
             cursor);
@@ -78,8 +77,8 @@ Triangulator::HullEdges Triangulator::build_range(
         left, right, cursor);
 }
 
-Triangulator::MortonSplit
-Triangulator::find_morton_split(
+Triangulator::Impl::MortonSplit
+Triangulator::Impl::find_morton_split(
     std::size_t first,
     std::size_t last) const {
     const std::uint32_t differing =
@@ -111,8 +110,8 @@ Triangulator::find_morton_split(
 template <
     bool WidePredicates,
     bool ParallelAllocation>
-Triangulator::DirectionalHulls
-Triangulator::build_morton_range(
+Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_morton_range(
     std::size_t first,
     std::size_t last,
     EdgeCursor* cursor) {
@@ -193,8 +192,8 @@ template <
     bool WidePredicates,
     bool ParallelAllocation>
 DELAUNAY32_ALWAYS_INLINE
-Triangulator::HullEdges
-Triangulator::merge_hulls_inline(
+Triangulator::Impl::HullEdges
+Triangulator::Impl::merge_hulls_inline(
     HullEdges left,
     HullEdges right,
     EdgeCursor* cursor,
@@ -290,8 +289,8 @@ Triangulator::merge_hulls_inline(
 template <
     bool WidePredicates,
     bool ParallelAllocation>
-Triangulator::HullEdges
-Triangulator::merge_hulls(
+Triangulator::Impl::HullEdges
+Triangulator::Impl::merge_hulls(
     HullEdges left,
     HullEdges right,
     EdgeCursor* cursor,
@@ -306,8 +305,8 @@ Triangulator::merge_hulls(
 template <
     bool WidePredicates,
     bool ParallelAllocation>
-Triangulator::DirectionalHulls
-Triangulator::merge_directional_hulls(
+Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::merge_directional_hulls(
     const DirectionalHulls& left,
     const DirectionalHulls& right,
     bool horizontal,
@@ -380,7 +379,7 @@ Triangulator::merge_directional_hulls(
     return result;
 }
 
-std::size_t Triangulator::add_parallel_node(
+std::size_t Triangulator::Impl::add_parallel_node(
     std::size_t first,
     std::size_t last,
     std::size_t target_size,
@@ -423,8 +422,8 @@ std::size_t Triangulator::add_parallel_node(
 }
 
 template <bool WidePredicates>
-Triangulator::DirectionalHulls
-Triangulator::build_parallel(
+Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_parallel(
     std::size_t thread_count,
     detail::WorkerTeam& workers) {
     const std::size_t target_jobs =
@@ -442,8 +441,8 @@ Triangulator::build_parallel(
         active_thread_count_ = 1;
         const DirectionalHulls hull =
             build_morton_range<WidePredicates>(0, points_.size());
-        edge_ranges_.push_back(
-            {0, static_cast<std::uint32_t>(edge_count_)});
+        arena_.ranges.push_back(
+            {0, static_cast<std::uint32_t>(arena_.count)});
         return hull;
     }
 
@@ -499,7 +498,7 @@ Triangulator::build_parallel(
                         node.first,
                         node.last,
                         &cursor);
-                finish_edge_cursor(cursor);
+                detail::EdgeArena::finish_cursor(cursor);
             }
             if (!barrier.wait()) {
                 return;
@@ -533,7 +532,7 @@ Triangulator::build_parallel(
                     node.hull =
                         merge_directional_hulls<WidePredicates, true>(
                             left, right, horizontal, &cursor);
-                    finish_edge_cursor(cursor);
+                    detail::EdgeArena::finish_cursor(cursor);
                 }
                 if (!barrier.wait()) {
                     return;
@@ -547,11 +546,11 @@ Triangulator::build_parallel(
     };
 
     workers.run(worker_count, run_jobs);
-    edge_count_ = 0;
+    arena_.count = 0;
     const auto collect_ranges = [&](const EdgeCursor& cursor) {
         for (const EdgeRange range : cursor.ranges) {
-            edge_ranges_.push_back(range);
-            edge_count_ += range.last - range.first;
+            arena_.ranges.push_back(range);
+            arena_.count += range.last - range.first;
         }
     };
     for (const EdgeCursor& cursor : leaf_cursors) {
@@ -561,16 +560,16 @@ Triangulator::build_parallel(
         collect_ranges(cursor);
     }
     std::sort(
-        edge_ranges_.begin(),
-        edge_ranges_.end(),
+        arena_.ranges.begin(),
+        arena_.ranges.end(),
         [](const EdgeRange& a, const EdgeRange& b) {
             return a.first < b.first;
         });
     return nodes.front().hull;
 }
 
-Triangulator::DirectionalHulls
-Triangulator::scan_directional_hulls(
+Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::scan_directional_hulls(
     std::uint32_t outer_seed) const {
     DirectionalHulls result;
     bool have_x_left = false;
@@ -632,130 +631,52 @@ Triangulator::scan_directional_hulls(
     return result;
 }
 
-void Triangulator::resize_edge_arena(std::size_t dart_count) {
-    // Reserve every backing allocation before changing any logical size.
-    // If allocation fails, all three sizes still agree, including when the
-    // caller starts a smaller problem after the failed run. Resizing uint32_t
-    // elements within reserved capacity cannot allocate or throw.
-    edge_origin_.reserve(dart_count);
-    edge_next_.reserve(dart_count);
-    edge_prev_.reserve(dart_count);
-    edge_origin_.resize(dart_count);
-    edge_next_.resize(dart_count);
-    edge_prev_.resize(dart_count);
-}
-
-void Triangulator::acquire_edge_block(EdgeCursor& cursor) {
-    finish_edge_cursor(cursor);
-    if (cursor.block_counter == nullptr) {
-        throw std::logic_error("parallel edge cursor has no block counter");
-    }
-    std::size_t capacity_limit = edge_capacity_limit_;
-#if defined(DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT)
-    capacity_limit = std::min(
-        capacity_limit,
-        static_cast<std::size_t>(
-            DELAUNAY32_TEST_PARALLEL_EDGE_ARENA_DART_LIMIT));
-#endif
-    const std::size_t first =
-        cursor.block_counter->fetch_add(
-            kEdgeBlockDarts, std::memory_order_relaxed);
-    if (first >= capacity_limit || capacity_limit - first < 2) {
-        throw detail::ParallelEdgeArenaExhausted{};
-    }
-    const std::size_t last =
-        std::min(first + kEdgeBlockDarts, capacity_limit);
-    cursor.next = static_cast<std::uint32_t>(first);
-    cursor.end = static_cast<std::uint32_t>(last);
-    cursor.range_first = cursor.next;
-}
-
-void Triangulator::finish_edge_cursor(EdgeCursor& cursor) {
-    if (cursor.range_first < cursor.next) {
-        cursor.ranges.push_back({cursor.range_first, cursor.next});
-    }
-    cursor.range_first = cursor.next;
+void Triangulator::Impl::splice(std::uint32_t a, std::uint32_t b) {
+    const std::uint32_t a_next = arena_.next[a];
+    const std::uint32_t b_next = arena_.next[b];
+    arena_.next[a] = b_next;
+    arena_.prev[b_next] = a;
+    arena_.next[b] = a_next;
+    arena_.prev[a_next] = b;
 }
 
 template <bool ParallelAllocation>
-std::uint32_t Triangulator::make_edge(
-    std::uint32_t origin,
-    std::uint32_t destination,
-    EdgeCursor* cursor) {
-    std::uint32_t edge = 0;
-    if constexpr (ParallelAllocation) {
-        if (cursor == nullptr) {
-            throw std::logic_error("parallel edge allocation has no cursor");
-        }
-        if (cursor->next + 2 > cursor->end) {
-            acquire_edge_block(*cursor);
-        }
-        edge = cursor->next;
-        cursor->next += 2;
-    } else {
-        if (edge_count_ + 2 > edge_origin_.size()) {
-            const std::size_t new_size =
-                std::max(edge_origin_.size() * 2, edge_count_ + 2);
-            resize_edge_arena(new_size);
-        }
-        edge = static_cast<std::uint32_t>(edge_count_);
-        edge_count_ += 2;
-    }
-    edge_origin_[edge] = origin;
-    edge_origin_[edge + 1] = destination;
-    edge_next_[edge] = edge;
-    edge_next_[edge + 1] = edge + 1;
-    edge_prev_[edge] = edge;
-    edge_prev_[edge + 1] = edge + 1;
-    return edge;
-}
-
-void Triangulator::splice(std::uint32_t a, std::uint32_t b) {
-    const std::uint32_t a_next = edge_next_[a];
-    const std::uint32_t b_next = edge_next_[b];
-    edge_next_[a] = b_next;
-    edge_prev_[b_next] = a;
-    edge_next_[b] = a_next;
-    edge_prev_[a_next] = b;
-}
-
-template <bool ParallelAllocation>
-std::uint32_t Triangulator::connect(
+std::uint32_t Triangulator::Impl::connect(
     std::uint32_t a,
     std::uint32_t b,
     EdgeCursor* cursor) {
     const std::uint32_t edge =
-        make_edge<ParallelAllocation>(dest(a), org(b), cursor);
+        arena_.make_edge<ParallelAllocation>(dest(a), org(b), cursor);
     splice(edge, lnext(a));
     splice(sym(edge), b);
     return edge;
 }
 
-void Triangulator::delete_edge(std::uint32_t edge) {
+void Triangulator::Impl::delete_edge(std::uint32_t edge) {
     splice(edge, oprev(edge));
     splice(sym(edge), oprev(sym(edge)));
     const std::uint32_t pair = edge & ~1U;
-    edge_origin_[pair] = kDeletedEdge;
-    edge_origin_[pair + 1] = kDeletedEdge;
+    arena_.origin[pair] = kDeletedEdge;
+    arena_.origin[pair + 1] = kDeletedEdge;
 }
 
-bool Triangulator::is_live_edge(std::uint32_t edge) const {
+bool Triangulator::Impl::is_live_edge(std::uint32_t edge) const {
     const std::uint32_t pair = edge & ~1U;
-    return pair + 1U < edge_origin_.size() &&
-           edge_origin_[pair] != kDeletedEdge;
+    return pair + 1U < arena_.origin.size() &&
+           arena_.origin[pair] != kDeletedEdge;
 }
 
-bool Triangulator::is_constrained(std::uint32_t edge) const {
-    return (edge_constrained_[edge & ~1U] & kConstrainedBit) != 0;
+bool Triangulator::Impl::is_constrained(std::uint32_t edge) const {
+    return (constraints_.edge_flags[edge & ~1U] & kConstrainedBit) != 0;
 }
 
-void Triangulator::mark_constrained(std::uint32_t edge) {
+void Triangulator::Impl::mark_constrained(std::uint32_t edge) {
     const std::uint32_t pair = edge & ~1U;
-    edge_constrained_[pair] |= kConstrainedBit;
-    edge_constrained_[pair + 1U] |= kConstrainedBit;
+    constraints_.edge_flags[pair] |= kConstrainedBit;
+    constraints_.edge_flags[pair + 1U] |= kConstrainedBit;
 }
 
-bool Triangulator::left_face_opposite(
+bool Triangulator::Impl::left_face_opposite(
     std::uint32_t edge,
     std::uint32_t& opposite) const {
     if (!is_live_edge(edge)) {
@@ -770,7 +691,7 @@ bool Triangulator::left_face_opposite(
     return orient(org(edge), dest(edge), opposite) > 0;
 }
 
-bool Triangulator::can_flip(std::uint32_t edge) const {
+bool Triangulator::Impl::can_flip(std::uint32_t edge) const {
     if (!is_live_edge(edge) || is_constrained(edge)) {
         return false;
     }
@@ -788,7 +709,7 @@ bool Triangulator::can_flip(std::uint32_t edge) const {
            (origin_side < 0 && destination_side > 0);
 }
 
-void Triangulator::flip_edge(std::uint32_t edge) {
+void Triangulator::Impl::flip_edge(std::uint32_t edge) {
     if (!can_flip(edge)) {
         throw std::logic_error("attempted to flip a nonflippable edge");
     }
@@ -803,18 +724,18 @@ void Triangulator::flip_edge(std::uint32_t edge) {
     splice(sym(edge), destination_previous);
     splice(edge, lnext(origin_previous));
     splice(sym(edge), lnext(destination_previous));
-    edge_origin_[edge] = dest(origin_previous);
-    edge_origin_[sym(edge)] = dest(destination_previous);
+    arena_.origin[edge] = dest(origin_previous);
+    arena_.origin[sym(edge)] = dest(destination_previous);
 
-    if (!site_edge_.empty()) {
-        site_edge_[old_origin] = origin_previous;
-        site_edge_[old_destination] = destination_previous;
-        site_edge_[org(edge)] = edge;
-        site_edge_[dest(edge)] = sym(edge);
+    if (!constraints_.site_edge.empty()) {
+        constraints_.site_edge[old_origin] = origin_previous;
+        constraints_.site_edge[old_destination] = destination_previous;
+        constraints_.site_edge[org(edge)] = edge;
+        constraints_.site_edge[dest(edge)] = sym(edge);
     }
 }
 
-std::int64_t Triangulator::orient(
+std::int64_t Triangulator::Impl::orient(
     std::uint32_t a,
     std::uint32_t b,
     std::uint32_t c) const {
@@ -827,19 +748,19 @@ std::int64_t Triangulator::orient(
                (static_cast<std::int64_t>(pc.x) - pa.x);
 }
 
-bool Triangulator::left_of(
+bool Triangulator::Impl::left_of(
     std::uint32_t point,
     std::uint32_t edge) const {
     return orient(org(edge), dest(edge), point) > 0;
 }
 
-bool Triangulator::right_of(
+bool Triangulator::Impl::right_of(
     std::uint32_t point,
     std::uint32_t edge) const {
     return orient(org(edge), dest(edge), point) < 0;
 }
 
-bool Triangulator::active_in_circle(
+bool Triangulator::Impl::active_in_circle(
     std::uint32_t a,
     std::uint32_t b,
     std::uint32_t c,
@@ -850,7 +771,7 @@ bool Triangulator::active_in_circle(
 }
 
 template <bool WidePredicates>
-bool Triangulator::in_circle(
+bool Triangulator::Impl::in_circle(
     std::uint32_t a,
     std::uint32_t b,
     std::uint32_t c,
@@ -934,22 +855,22 @@ bool Triangulator::in_circle(
 
 // The API translation unit calls these specializations by declaration. Emit
 // them here so all topology template expansion remains centralized.
-template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<false, false>(
+template Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_morton_range<false, false>(
     std::size_t,
     std::size_t,
     EdgeCursor*);
-template Triangulator::DirectionalHulls
-Triangulator::build_morton_range<true, false>(
+template Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_morton_range<true, false>(
     std::size_t,
     std::size_t,
     EdgeCursor*);
-template Triangulator::DirectionalHulls
-Triangulator::build_parallel<false>(
+template Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_parallel<false>(
     std::size_t,
     detail::WorkerTeam&);
-template Triangulator::DirectionalHulls
-Triangulator::build_parallel<true>(
+template Triangulator::Impl::DirectionalHulls
+Triangulator::Impl::build_parallel<true>(
     std::size_t,
     detail::WorkerTeam&);
 

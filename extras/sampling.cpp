@@ -59,9 +59,11 @@ void validate_bounds(const SamplingBounds& bounds) {
         !std::isfinite(bounds.max_x) ||
         !std::isfinite(bounds.min_y) ||
         !std::isfinite(bounds.max_y) ||
-        bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y) {
+        bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y ||
+        !std::isfinite(bounds.max_x - bounds.min_x) ||
+        !std::isfinite(bounds.max_y - bounds.min_y)) {
         throw std::invalid_argument(
-            "sampling bounds must be finite and ordered");
+            "sampling bounds must be finite and ordered with finite spans");
     }
 }
 
@@ -211,32 +213,6 @@ struct RegionCandidate {
     std::size_t domain = 0;
 };
 
-RegionCandidate random_polygon_candidate(
-    std::mt19937_64& random,
-    const SamplingBounds& bounds,
-    const std::vector<FloatPoint>& points,
-    const std::vector<PolygonDomain>& domains,
-    const std::vector<SamplingBounds>& domain_bounds,
-    std::size_t attempts) {
-    std::uniform_real_distribution<double> x_coordinate(
-        bounds.min_x, bounds.max_x);
-    std::uniform_real_distribution<double> y_coordinate(
-        bounds.min_y, bounds.max_y);
-    for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
-        const FloatPoint candidate = {
-            x_coordinate(random),
-            y_coordinate(random),
-        };
-        const std::size_t domain = find_containing_domain(
-            candidate, points, domains, domain_bounds);
-        if (domain != domains.size()) {
-            return {candidate, domain};
-        }
-    }
-    throw std::runtime_error(
-        "could not sample a point inside the configured polygon domains");
-}
-
 SamplingScalar squared_distance(
     const FloatPoint& first,
     const FloatPoint& second) {
@@ -329,6 +305,13 @@ public:
         cell_height_ = height / static_cast<double>(y_cells_);
         inverse_cell_width_ = 1.0 / cell_width_;
         inverse_cell_height_ = 1.0 / cell_height_;
+        // Extremely small cells can underflow or have infinite reciprocals.
+        // Leave the grid disabled so queries use the linear fallback.
+        if (cell_width_ <= 0.0 || cell_height_ <= 0.0 ||
+            !std::isfinite(inverse_cell_width_) ||
+            !std::isfinite(inverse_cell_height_)) {
+            return;
+        }
         heads_.assign(x_cells_ * y_cells_, kNoPoint);
         next_.reserve(point_count);
     }
@@ -406,11 +389,13 @@ private:
     std::pair<std::size_t, std::size_t> cell(
         const FloatPoint& point) const {
         const auto coordinate = [](double value, std::size_t count) {
-            if (value <= 0.0) {
+            if (!(value > 0.0)) {
                 return std::size_t{0};
             }
-            return std::min(
-                static_cast<std::size_t>(value), count - 1);
+            if (value >= static_cast<double>(count)) {
+                return count - 1;
+            }
+            return static_cast<std::size_t>(value);
         };
         return {
             coordinate(
@@ -593,11 +578,13 @@ SamplingScalar ring_area_twice(
     const std::vector<std::uint32_t>& ring,
     const std::vector<FloatPoint>& points) {
     SamplingScalar area = 0.0;
+    // Translate before multiplying to avoid cancellation from large offsets.
+    const FloatPoint& origin = points[ring.front()];
     for (std::size_t i = 0; i < ring.size(); ++i) {
         const FloatPoint& first = points[ring[i]];
         const FloatPoint& second = points[ring[(i + 1) % ring.size()]];
-        area += static_cast<SamplingScalar>(first.x) * second.y -
-                static_cast<SamplingScalar>(first.y) * second.x;
+        area += (first.x - origin.x) * (second.y - origin.y) -
+                (first.y - origin.y) * (second.x - origin.x);
     }
     return std::abs(area);
 }
@@ -626,7 +613,45 @@ public:
         : bounds_(bounds),
           polygon_points_(polygon_points),
           domains_(domains),
-          domain_bounds_(domain_bounds) {}
+          domain_bounds_(domain_bounds) {
+        if (domains_.size() <= 1) {
+            return;
+        }
+        // Log areas avoid overflow/underflow in width*height. Scaling all
+        // weights equally keeps selection proportional to box area.
+        std::vector<double> weights;
+        weights.reserve(domain_bounds_.size());
+        double maximum = -std::numeric_limits<double>::infinity();
+        for (const SamplingBounds& box : domain_bounds_) {
+            const double width = box.max_x - box.min_x;
+            const double height = box.max_y - box.min_y;
+            const double log_area = width > 0.0 && height > 0.0
+                ? std::log(width) + std::log(height)
+                : -std::numeric_limits<double>::infinity();
+            weights.push_back(log_area);
+            maximum = std::max(maximum, log_area);
+        }
+        if (!std::isfinite(maximum)) {
+            return; // Degenerate domains retain the bounded rejection path.
+        }
+        double total_weight = 0.0;
+        for (double& weight : weights) {
+            weight = std::exp(weight - maximum);
+            total_weight += weight;
+        }
+        const double global_area = std::log(bounds_.max_x - bounds_.min_x) +
+                                   std::log(bounds_.max_y - bounds_.min_y);
+        // Box selection and overlap counting add per-candidate work. Require
+        // at least a fourfold reduction in proposal area to amortize that cost.
+        constexpr double minimum_area_saving = 4.0;
+        if (maximum + std::log(total_weight) >=
+            global_area - std::log(minimum_area_saving)) {
+            return;
+        }
+        domain_distribution_ = std::discrete_distribution<std::size_t>(
+            weights.begin(), weights.end());
+        sample_domain_bounds_ = true;
+    }
 
     const SamplingBounds& bounds() const { return bounds_; }
     bool is_polygon() const { return !domains_.empty(); }
@@ -650,20 +675,39 @@ public:
     RegionCandidate random_candidate(
         std::mt19937_64& random,
         std::size_t attempts) const {
-        if (is_polygon()) {
-            return random_polygon_candidate(
-                random,
-                bounds_,
-                polygon_points_,
-                domains_,
-                domain_bounds_,
-                attempts);
+        for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
+            const SamplingBounds& box = sample_domain_bounds_
+                ? domain_bounds_[domain_distribution_(random)] : bounds_;
+            std::uniform_real_distribution<double> x_coordinate(
+                box.min_x, box.max_x);
+            std::uniform_real_distribution<double> y_coordinate(
+                box.min_y, box.max_y);
+            const FloatPoint point{x_coordinate(random), y_coordinate(random)};
+            if (!is_polygon()) {
+                return {point, 0};
+            }
+            if (sample_domain_bounds_) {
+                std::size_t coverage = 0;
+                for (const SamplingBounds& candidate_box : domain_bounds_) {
+                    coverage += bounds_contain(candidate_box, point) ? 1U : 0U;
+                }
+                // A point covered by k proposal boxes is proposed k times as
+                // often. Accepting with probability 1/k restores uniformity
+                // over their union, including overlapping polygon domains.
+                if (coverage > 1 &&
+                    std::uniform_int_distribution<std::size_t>(
+                        1, coverage)(random) != 1) {
+                    continue;
+                }
+            }
+            const std::size_t domain = find_containing_domain(
+                point, polygon_points_, domains_, domain_bounds_);
+            if (domain != domains_.size()) {
+                return {point, domain};
+            }
         }
-        std::uniform_real_distribution<double> x_coordinate(
-            bounds_.min_x, bounds_.max_x);
-        std::uniform_real_distribution<double> y_coordinate(
-            bounds_.min_y, bounds_.max_y);
-        return {{x_coordinate(random), y_coordinate(random)}, 0};
+        throw std::runtime_error(
+            "could not sample a point inside the configured polygon domains");
     }
 
     SamplingScalar boundary_distance_squared(
@@ -681,6 +725,8 @@ private:
     const std::vector<FloatPoint>& polygon_points_;
     const std::vector<PolygonDomain>& domains_;
     const std::vector<SamplingBounds>& domain_bounds_;
+    bool sample_domain_bounds_ = false;
+    mutable std::discrete_distribution<std::size_t> domain_distribution_;
 };
 
 FloatPoint choose_best_candidate(
@@ -1105,6 +1151,7 @@ void PointSampler::set_polygon_interiors(
     std::vector<SamplingBounds> domain_bounds =
         calculate_domain_bounds(points, domains);
     const SamplingBounds bounds = combined_bounds(domain_bounds);
+    validate_bounds(bounds);
 
     bounds_ = bounds;
     polygon_points_ = std::move(points);
@@ -1142,16 +1189,11 @@ std::vector<FloatPoint> PointSampler::generate_uniform(
         return generated;
     }
 
+    const SamplingRegionView region(
+        bounds_, polygon_points_, domains_, domain_bounds_);
     while (generated.size() < options.point_count) {
         generated.push_back(
-            random_polygon_candidate(
-                random,
-                bounds_,
-                polygon_points_,
-                domains_,
-                domain_bounds_,
-                options.attempts_per_point)
-                .point);
+            region.random_candidate(random, options.attempts_per_point).point);
     }
     return generated;
 }

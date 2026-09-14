@@ -119,12 +119,17 @@ FloatQuantizer make_quantizer(
                     "floating-point coordinate span is too large to "
                     "quantize");
             }
+            const double scale = maximum_span == 0.0
+                                     ? 0.0
+                                     : target_span / maximum_span;
+            if (!std::isfinite(scale)) {
+                throw std::invalid_argument(
+                    "floating-point coordinate span is too small to quantize");
+            }
             return {
                 bounds.min_x,
                 bounds.min_y,
-                maximum_span == 0.0
-                    ? 0.0
-                    : target_span / maximum_span,
+                scale,
                 target_span,
                 true,
             };
